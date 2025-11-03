@@ -61,6 +61,8 @@ data/*.gz
 data/*.jsonl.gz
 !data/.gitkeep
 !data/README.md
+!data/*.py
+!data/variables_list.csv
 
 # Logs
 *.log
