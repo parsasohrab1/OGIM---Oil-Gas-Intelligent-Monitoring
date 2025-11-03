@@ -4,7 +4,17 @@
 
 ## 📁 محتویات
 
-این پوشه شامل داده‌های تولید شده برای 4 چاه می‌باشد:
+این پوشه شامل:
+- 📊 داده‌های تولید شده برای 4 چاه
+- 🐍 اسکریپت‌های تولید داده (Python)
+- 📋 فایل CSV لیست متغیرها
+
+### 🐍 اسکریپت‌های موجود در این پوشه
+- ✅ `advanced_data_generator.py` - تولید داده 6 ماهه (1 ثانیه تایم لپس)
+- ✅ `generate_sample_data.py` - تولید داده نمونه 1 هفته (1 دقیقه تایم لپس)
+- ✅ `variables_list.csv` - لیست کامل 65+ متغیر در فرمت CSV
+
+### 📊 داده‌های چاه‌ها
 
 ### داده‌های نمونه (1 هفته) ✅ موجود
 - `PROD-001_sample_1week.json` - داده JSON چاه تولیدی 1 (~20 MB)
@@ -34,8 +44,20 @@ python scripts/advanced_data_generator.py
 
 ## 🚀 تولید داده
 
-### داده نمونه (سریع - ✅ اجرا شده)
+### روش 1: اجرا از پوشه data (مستقیم)
 ```bash
+# داده نمونه (سریع)
+cd OGIM---Oil-Gas-Intelligent-Monitoring/data
+python generate_sample_data.py
+
+# داده کامل (6 ماه)
+python advanced_data_generator.py
+```
+
+### روش 2: اجرا از پوشه scripts (اصلی)
+```bash
+# داده نمونه (سریع - ✅ اجرا شده)
+cd OGIM---Oil-Gas-Intelligent-Monitoring
 python scripts/generate_sample_data.py
 ```
 - مدت: 1 هفته
@@ -43,8 +65,8 @@ python scripts/generate_sample_data.py
 - رکورد: 10,080 × 4 چاه = 40,320 رکورد
 - زمان: ~3-5 دقیقه
 
-### داده کامل (طبق SRS)
 ```bash
+# داده کامل (طبق SRS)
 python scripts/advanced_data_generator.py
 ```
 - مدت: 6 ماه (180 روز)
@@ -87,6 +109,42 @@ python scripts/advanced_data_generator.py
 - ✅ فقط README.md در Git commit می‌شود
 - 🗜️ فایل‌های 6 ماهه با gzip فشرده شده‌اند
 - 💾 حجم کل (full): ~12-15 GB
+
+## 📋 استفاده از فایل Variables CSV
+
+فایل `variables_list.csv` شامل تمام 65+ متغیر با جزئیات کامل است.
+
+### خواندن با Python
+```python
+import pandas as pd
+
+# Load variables list
+df_vars = pd.read_csv('variables_list.csv')
+print(df_vars.head())
+
+# Filter by category
+pressure_vars = df_vars[df_vars['Category'] == 'Pressure']
+print(pressure_vars)
+
+# Get variable details
+temp_vars = df_vars[df_vars['Category'] == 'Temperature']
+for _, var in temp_vars.iterrows():
+    print(f"{var['Variable_Name']}: {var['Min_Range']}-{var['Max_Range']} {var['Unit']}")
+```
+
+### باز کردن با Excel
+فایل را مستقیماً با Microsoft Excel، Google Sheets یا LibreOffice باز کنید.
+
+### ساختار فایل CSV
+- `Category`: دسته‌بندی متغیر (Pressure, Temperature, etc.)
+- `Variable_Name`: نام انگلیسی متغیر
+- `Unit`: واحد اندازه‌گیری
+- `Min_Range`: حداقل محدوده
+- `Max_Range`: حداکثر محدوده
+- `Description`: توضیحات انگلیسی
+- `Arabic_Name`: نام فارسی/عربی متغیر
+
+---
 
 ## 🔍 نحوه خواندن داده‌ها
 
