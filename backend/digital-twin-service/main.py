@@ -1,0 +1,77 @@
+"""
+Digital Twin Service
+Hosts engineering calculations and process simulations
+"""
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import Dict, Optional
+from datetime import datetime
+import uvicorn
+
+app = FastAPI(title="OGIM Digital Twin Service", version="1.0.0")
+
+
+class SimulationRequest(BaseModel):
+    well_name: str
+    parameters: Dict[str, float]
+    simulation_type: str  # production_optimization, pressure_analysis, etc.
+
+
+class SimulationResponse(BaseModel):
+    simulation_id: str
+    well_name: str
+    results: Dict[str, float]
+    timestamp: datetime
+    recommendations: Optional[list] = None
+
+
+simulations_db = []
+
+
+@app.post("/simulate", response_model=SimulationResponse)
+async def run_simulation(request: SimulationRequest):
+    """Run engineering simulation"""
+    simulation_id = f"SIM-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    
+    # Mock simulation results
+    results = {
+        "optimal_flow_rate": 450.5,
+        "predicted_pressure": 325.2,
+        "efficiency": 0.92,
+    }
+    
+    recommendations = [
+        "Optimize pump speed to 85% for maximum efficiency",
+        "Consider maintenance in next 30 days"
+    ]
+    
+    simulation = SimulationResponse(
+        simulation_id=simulation_id,
+        well_name=request.well_name,
+        results=results,
+        timestamp=datetime.now(),
+        recommendations=recommendations
+    )
+    
+    simulations_db.append(simulation.dict())
+    return simulation
+
+
+@app.get("/simulations")
+async def list_simulations(well_name: Optional[str] = None):
+    """List simulations"""
+    filtered = simulations_db
+    if well_name:
+        filtered = [s for s in simulations_db if s.get("well_name") == well_name]
+    return {"simulations": filtered, "count": len(filtered)}
+
+
+@app.get("/health")
+async def health():
+    """Health check"""
+    return {"status": "healthy", "total_simulations": len(simulations_db)}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8008)
+

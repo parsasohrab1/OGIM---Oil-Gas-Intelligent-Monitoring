@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # PostgreSQL
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ogim
+      POSTGRES_USER: ogim_user
+      POSTGRES_PASSWORD: ogim_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # TimescaleDB (Time-Series Database)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_DB: ogim_tsdb
+      POSTGRES_USER: ogim_user
+      POSTGRES_PASSWORD: ogim_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ../../backend/api-gateway
+    ports:
+      - "8000:8000"
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ../../backend/auth-service
+    ports:
+      - "8001:8001"
+    depends_on:
+      - postgres
+
+  # Data Ingestion Service
+  data-ingestion-service:
+    build:
+      context: ../../backend/data-ingestion-service
+    ports:
+      - "8002:8002"
+    depends_on:
+      - kafka
+
+  # ML Inference Service
+  ml-inference-service:
+    build:
+      context: ../../backend/ml-inference-service
+    ports:
+      - "8003:8003"
+    depends_on:
+      - postgres
+
+  # Alert Service
+  alert-service:
+    build:
+      context: ../../backend/alert-service
+    ports:
+      - "8004:8004"
+    depends_on:
+      - postgres
+
+  # Reporting Service
+  reporting-service:
+    build:
+      context: ../../backend/reporting-service
+    ports:
+      - "8005:8005"
+    depends_on:
+      - postgres
+      - timescaledb
+
+  # Command & Control Service
+  command-control-service:
+    build:
+      context: ../../backend/command-control-service
+    ports:
+      - "8006:8006"
+    depends_on:
+      - postgres
+      - kafka
+
+  # Tag Catalog Service
+  tag-catalog-service:
+    build:
+      context: ../../backend/tag-catalog-service
+    ports:
+      - "8007:8007"
+    depends_on:
+      - postgres
+
+  # Digital Twin Service
+  digital-twin-service:
+    build:
+      context: ../../backend/digital-twin-service
+    ports:
+      - "8008:8008"
+    depends_on:
+      - postgres
+      - timescaledb
+
+volumes:
+  postgres_data:
+  timescaledb_data:
+
