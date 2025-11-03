@@ -56,7 +56,11 @@ Desktop.ini
 # Data (generated files)
 data/*.json
 data/*.csv
+data/*.jsonl
+data/*.gz
+data/*.jsonl.gz
 !data/.gitkeep
+!data/README.md
 
 # Logs
 *.log
