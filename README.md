@@ -1,519 +1,620 @@
-# 🛢️ OGIM - Oil & Gas Intelligent Monitoring System
-
-<div align="center">
-
-**سیستم هوشمند نظارت و پایش میدان نفت و گاز**
-
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://python.org)
-[![Node](https://img.shields.io/badge/Node-18+-green.svg)](https://nodejs.org)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-Ready-blue.svg)](https://kubernetes.io)
-
-[English](#english) | [فارسی](#persian)
-
-</div>
+# **Software Requirements Specification (SRS) - OGIM: Oil & Gas Intelligent Monitoring System**
+**Version:** 2.0 | **Date:** November 2025 | **Status:** FINAL
 
 ---
 
-## <a name="persian"></a>📖 توضیحات (فارسی)
-
-### 🎯 درباره پروژه
-
-OGIM یک سیستم جامع و هوشمند برای نظارت، پایش و کنترل میدان‌های نفت و گاز است که با استفاده از فناوری‌های مدرن شامل:
-- ✅ **یادگیری ماشین (ML)** برای تشخیص ناهنجاری و پیش‌بینی خرابی
-- ✅ **پردازش جریانی (Stream Processing)** با Apache Flink
-- ✅ **معماری میکروسرویس (Microservices)** با FastAPI
-- ✅ **رابط کاربری مدرن (Modern UI)** با React + TypeScript
-- ✅ **پایگاه داده سری زمانی (Time-Series DB)** با TimescaleDB
-- ✅ **مدیریت هوشمند هشدارها (Alert Management)**
-- ✅ **اتصال به SCADA/PLC** با OPC UA و Modbus
-
-### 🏗️ معماری سیستم
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    OGIM System Architecture                      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐  │
-│  │  SCADA/PLC   │──────▶│ Data Ingestion│──────▶│    Kafka     │  │
-│  │  (OPC UA)    │      │   Service     │      │  Message Bus │  │
-│  └──────────────┘      └──────────────┘      └──────────────┘  │
-│                                                      │           │
-│                                                      ▼           │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │            Apache Flink Stream Processing                │  │
-│  │  • Data Cleansing  • CEP  • Anomaly Detection           │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                              │                                  │
-│                 ┌────────────┼────────────┐                    │
-│                 ▼            ▼            ▼                    │
-│        ┌──────────────┐ ┌─────────┐ ┌──────────┐             │
-│        │ TimescaleDB  │ │  Alert  │ │    ML    │             │
-│        │ (Time-Series)│ │ Service │ │ Inference│             │
-│        └──────────────┘ └─────────┘ └──────────┘             │
-│                              │                                  │
-│                              ▼                                  │
-│                     ┌─────────────────┐                        │
-│                     │   API Gateway   │                        │
-│                     └─────────────────┘                        │
-│                              │                                  │
-│                              ▼                                  │
-│                   ┌────────────────────┐                       │
-│                   │   React Web Portal │                       │
-│                   └────────────────────┘                       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 📊 داده‌های تولیدی
-
-سیستم شامل **65+ متغیر** برای نظارت کامل میدان است:
-
-| دسته | تعداد | شامل |
-|------|-------|------|
-| 🔧 فشار | 6 | Wellhead, Tubing, Casing, Separator, Line, Bottom Hole |
-| 🌡️ دما | 5 | Wellhead, Separator, Line, Motor, Bearing |
-| 💧 جریان | 5 | Oil, Gas, Water, Total Liquid, Injection |
-| 🧪 ترکیب | 5 | Oil Cut, Water Cut, GOR, BS&W, API Gravity |
-| ⚙️ پمپ | 6 | Speed, Frequency, Current, Voltage, Power, Efficiency |
-| 📳 لرزش | 4 | X/Y/Z axes, Overall |
-| 🚰 شیر و ولو | 4 | Choke, Wing, Master, Safety Valve |
-| 📏 سطح | 4 | Separator Oil/Water, Tank, Fluid |
-| 🔬 کیفیت | 5 | H2S, CO2, Salt, Viscosity, Density |
-| 🌍 محیطی | 4 | Temperature, Pressure, Humidity, Wind |
-| ⚡ الکتریکی | 8 | 3-Phase Voltage/Current, Power Factor, Frequency |
-| 📈 عملکرد | 5 | Production Rate, Cumulative, Uptime, Efficiency |
-| 🔔 وضعیت | 4 | Well, Pump, Alarm, Production Mode |
-
-**جمع کل: 65+ متغیر**
-
-### 🏭 چاه‌های شبیه‌سازی شده
-
-| نام چاه | نوع | نرخ تولید | فشار پایه |
-|---------|-----|-----------|-----------|
-| **PROD-001** | تولیدی | 800-1500 bbl/day | 2000-3500 psi |
-| **PROD-002** | تولیدی | 800-1500 bbl/day | 2000-3500 psi |
-| **DEV-001** | توسعه‌ای | 500-1000 bbl/day | 1500-3000 psi |
-| **OBS-001** | مشاهده‌ای | 0 bbl/day | 1000-2500 psi |
-
-### 📂 ساختار پروژه
-
-```
-OGIM---Oil-Gas-Intelligent-Monitoring/
-├── 🐳 backend/                       # Backend Microservices
-│   ├── shared/                       # Shared modules (DB, Auth, Config)
-│   ├── api-gateway/                  # API Gateway (NGINX/FastAPI)
-│   ├── auth-service/                 # Authentication (JWT, OAuth2)
-│   ├── data-ingestion-service/       # Data Ingestion (OPC UA, Kafka)
-│   ├── ml-inference-service/         # ML Inference (MLflow, Sklearn)
-│   ├── alert-service/                # Alert Management
-│   ├── reporting-service/            # Reporting & Analytics
-│   ├── command-control-service/      # Command & Control (2FA)
-│   ├── tag-catalog-service/          # Tag Metadata Management
-│   ├── digital-twin-service/         # Digital Twin
-│   ├── flink-jobs/                   # Apache Flink Stream Processing
-│   └── tests/                        # Unit & Integration Tests
-│
-├── 🎨 frontend/                      # Frontend Applications
-│   └── web/                          # React + TypeScript Web Portal
-│       ├── src/
-│       │   ├── components/          # React Components
-│       │   ├── pages/               # Page Components
-│       │   ├── api/                 # API Clients
-│       │   └── hooks/               # Custom Hooks
-│       └── public/
-│
-├── 📊 data/                          # Generated Data & Scripts
-│   ├── advanced_data_generator.py   # 6-month data generator (1 sec)
-│   ├── generate_sample_data.py      # 1-week data generator (1 min)
-│   ├── variables_list.csv           # Complete variables list (CSV)
-│   ├── PROD-001_sample_1week.json   # Sample data (JSON)
-│   ├── PROD-001_sample_1week.csv    # Sample data (CSV)
-│   └── ... (other well data)
-│
-├── 🐳 infrastructure/                # Infrastructure as Code
-│   ├── docker/
-│   │   └── docker-compose.dev.yml   # Local development setup
-│   └── kubernetes/                   # K8s manifests
-│       ├── postgres-deployment.yaml
-│       ├── timescaledb-deployment.yaml
-│       ├── redis-deployment.yaml
-│       └── ... (other services)
-│
-├── 📜 scripts/                       # Utility Scripts
-│   ├── setup_dev.sh                 # Development setup (Linux/Mac)
-│   ├── setup_dev.ps1                # Development setup (Windows)
-│   ├── run_tests.sh                 # Run all tests
-│   ├── deploy_production.sh         # Production deployment
-│   ├── advanced_data_generator.py   # Data generator (main)
-│   └── generate_sample_data.py      # Sample data generator
-│
-├── 📚 docs/                          # Documentation
-│   ├── ARCHITECTURE.md              # System architecture
-│   └── DEPLOYMENT.md                # Deployment guide
-│
-├── 📄 README.md                      # این فایل
-└── 📋 requirements.txt               # Python dependencies
-```
-
-### 🚀 شروع سریع
-
-#### پیش‌نیازها
-
-- **Python** 3.10+
-- **Node.js** 18+
-- **Docker** & Docker Compose
-- **PostgreSQL** 14+
-- **Redis** 7+
-- **Kafka** 3.0+
-
-#### نصب و راه‌اندازی
-
-##### 1️⃣ کلون کردن پروژه
-
-```bash
-git clone https://github.com/parsasohrab1/OGIM---Oil-Gas-Intelligent-Monitoring.git
-cd OGIM---Oil-Gas-Intelligent-Monitoring
-```
-
-##### 2️⃣ راه‌اندازی با Docker Compose (توصیه شده)
-
-```bash
-# ایجاد فایل .env
-cp .env.example .env
-
-# راه‌اندازی تمام سرویس‌ها
-docker-compose -f docker-compose.dev.yml up -d
-
-# بررسی وضعیت
-docker-compose ps
-```
-
-##### 3️⃣ راه‌اندازی دستی (Development)
-
-**Backend:**
-```bash
-# ایجاد محیط مجازی
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# نصب وابستگی‌ها
-cd backend/shared
-pip install -r requirements.txt
-
-# مقداردهی اولیه دیتابیس
-python -m init_db
-
-# اجرای سرویس‌ها
-cd ../auth-service
-uvicorn main:app --reload --port 8001
-
-cd ../data-ingestion-service
-uvicorn main:app --reload --port 8002
-
-# ... (سایر سرویس‌ها)
-```
-
-**Frontend:**
-```bash
-cd frontend/web
-npm install
-npm run dev
-```
-
-##### 4️⃣ تولید داده نمونه
-
-```bash
-# داده نمونه (1 هفته، 1 دقیقه)
-cd data
-python generate_sample_data.py
-
-# داده کامل (6 ماه، 1 ثانیه)
-python advanced_data_generator.py
-```
-
-### 🎯 ویژگی‌های کلیدی
-
-#### 1. نظارت بلادرنگ (Real-Time Monitoring)
-- ✅ Dashboard تعاملی با نمودارهای زنده
-- ✅ بروزرسانی هر 1-10 ثانیه
-- ✅ نمایش 65+ متغیر به صورت همزمان
-- ✅ تاریخچه و روندها (Historical Trends)
-
-#### 2. یادگیری ماشین (Machine Learning)
-- ✅ **Anomaly Detection** با Isolation Forest
-- ✅ **Failure Prediction** با Random Forest
-- ✅ مدیریت مدل‌ها با MLflow
-- ✅ Training و Inference بلادرنگ
-- ✅ Model versioning و A/B testing
-
-#### 3. مدیریت هوشمند هشدارها (Alert Management)
-- ✅ قوانین پویا (Dynamic Rules)
-- ✅ سطوح مختلف: Info, Warning, Critical
-- ✅ جلوگیری از هشدارهای تکراری (Deduplication)
-- ✅ Escalation و Notification
-- ✅ تاریخچه کامل هشدارها
-
-#### 4. کنترل و فرمان (Command & Control)
-- ✅ ارسال فرمان به تجهیزات
-- ✅ احراز هویت دو مرحله‌ای (2FA)
-- ✅ سیستم تایید و اجرا (Approval Workflow)
-- ✅ Audit logging کامل
-- ✅ نقش‌ها و دسترسی‌ها (RBAC)
-
-#### 5. پردازش جریانی (Stream Processing)
-- ✅ Apache Flink برای پردازش real-time
-- ✅ Data cleansing و enrichment
-- ✅ Complex Event Processing (CEP)
-- ✅ Window operations (Tumbling, Sliding)
-- ✅ Checkpointing برای fault tolerance
-
-#### 6. اتصال به SCADA/PLC
-- ✅ پروتکل OPC UA
-- ✅ پروتکل Modbus TCP
-- ✅ Connector قابل توسعه
-- ✅ Auto-reconnection
-- ✅ Data buffering
-
-### 🔐 امنیت
-
-- ✅ **Authentication**: JWT tokens
-- ✅ **Authorization**: Role-Based Access Control (RBAC)
-- ✅ **Password Hashing**: Bcrypt
-- ✅ **2FA**: Two-Factor Authentication برای فرمان‌های حساس
-- ✅ **Audit Logging**: ثبت تمام فعالیت‌ها
-- ✅ **Rate Limiting**: محدودیت درخواست با Redis
-- ✅ **CORS**: تنظیمات امن Cross-Origin
-
-### 📊 تولید داده
-
-#### داده نمونه (سریع - برای تست)
-```bash
-cd data
-python generate_sample_data.py
-```
-- **مدت:** 1 هفته
-- **تایم لپس:** 1 دقیقه
-- **رکورد:** 40,320
-- **حجم:** ~98 MB
-- **زمان:** 3-5 دقیقه
-
-#### داده کامل (6 ماه - طبق SRS)
-```bash
-cd data
-python advanced_data_generator.py
-```
-- **مدت:** 6 ماه (180 روز)
-- **تایم لپس:** 1 ثانیه ⏱️
-- **رکورد:** 62,208,000
-- **حجم:** ~12-15 GB (compressed)
-- **زمان:** 4-8 ساعت
-
-#### ویژگی‌های شبیه‌سازی
-- ✅ کاهش تولید (Production Decline)
-- ✅ چرخه‌های روزانه و هفتگی
-- ✅ افزایش Water Cut (10% → 95%)
-- ✅ تعمیرات دوره‌ای (هر 30 روز)
-- ✅ فرسودگی تجهیزات
-- ✅ شناسایی ناهنجاری
-- ✅ Shutdowns و Maintenance
-
-### 🧪 تست
-
-```bash
-# اجرای تمام تست‌ها
-cd backend
-pytest
-
-# تست با coverage
-pytest --cov=backend --cov-report=html
-
-# تست یک سرویس خاص
-pytest tests/test_auth_service.py -v
-```
-
-### 🚢 استقرار (Deployment)
-
-#### Kubernetes (Production)
-
-```bash
-# ایجاد namespace
-kubectl create namespace ogim
-
-# اعمال ConfigMaps و Secrets
-kubectl apply -f infrastructure/kubernetes/configmap.yaml
-kubectl apply -f infrastructure/kubernetes/secrets.yaml
-
-# استقرار databases
-kubectl apply -f infrastructure/kubernetes/postgres-deployment.yaml
-kubectl apply -f infrastructure/kubernetes/timescaledb-deployment.yaml
-kubectl apply -f infrastructure/kubernetes/redis-deployment.yaml
-
-# استقرار Kafka
-kubectl apply -f infrastructure/kubernetes/kafka-deployment.yaml
-
-# استقرار backend services
-kubectl apply -f infrastructure/kubernetes/backend-deployments.yaml
-
-# استقرار frontend
-kubectl apply -f infrastructure/kubernetes/frontend-deployment.yaml
-
-# بررسی وضعیت
-kubectl get pods -n ogim
-kubectl get services -n ogim
-```
-
-#### Docker Compose (Development)
-
-```bash
-docker-compose -f docker-compose.dev.yml up -d
-```
-
-### 📖 API Documentation
-
-پس از راه‌اندازی، مستندات API در آدرس‌های زیر قابل دسترسی است:
-
-- **API Gateway:** http://localhost:8000/docs
-- **Auth Service:** http://localhost:8001/docs
-- **Data Ingestion:** http://localhost:8002/docs
-- **Alert Service:** http://localhost:8003/docs
-- **ML Inference:** http://localhost:8004/docs
-
-### 🛠️ تکنولوژی‌ها
-
-#### Backend
-- **FastAPI** - Web framework
-- **SQLAlchemy** - ORM
-- **PostgreSQL** - Relational database
-- **TimescaleDB** - Time-series database
-- **Redis** - Cache & rate limiting
-- **Apache Kafka** - Message broker
-- **Apache Flink** - Stream processing
-- **MLflow** - ML lifecycle management
-- **Scikit-learn** - ML models
-- **OPC UA** - SCADA/PLC connectivity
-- **Pytest** - Testing framework
-
-#### Frontend
-- **React 18** - UI library
-- **TypeScript** - Type safety
-- **Vite** - Build tool
-- **TanStack Query** - Data fetching
-- **Recharts** - Data visualization
-- **Axios** - HTTP client
-
-#### Infrastructure
-- **Docker** - Containerization
-- **Kubernetes** - Orchestration
-- **NGINX** - Reverse proxy
-- **GitHub Actions** - CI/CD
-
-### 📈 Performance
-
-- ⚡ **Latency:** < 100ms (API responses)
-- 🚀 **Throughput:** 10,000+ events/sec
-- 💾 **Storage:** Time-series compression (90% savings)
-- 🔄 **Uptime:** 99.9%+ (High availability)
-- 📊 **Scalability:** Horizontal scaling ready
-
-### 🤝 مشارکت
-
-1. Fork کنید
-2. Feature branch بسازید (`git checkout -b feature/AmazingFeature`)
-3. تغییرات را commit کنید (`git commit -m 'Add AmazingFeature'`)
-4. Push کنید (`git push origin feature/AmazingFeature`)
-5. Pull Request باز کنید
-
-### 📝 لایسنس
-
-این پروژه تحت لایسنس MIT منتشر شده است.
-
-### 👥 نویسندگان
-
-- **Parsa Sohrab** - [parsasohrab1](https://github.com/parsasohrab1)
-
-### 🙏 تشکر
-
-- Apache Software Foundation (Kafka, Flink)
-- PostgreSQL & TimescaleDB teams
-- FastAPI & React communities
+## **1. Introduction**
+
+### **1.1 Purpose**
+This document specifies the complete software requirements for the **Oil & Gas Intelligent Monitoring (OGIM) System** - a comprehensive real-time monitoring, predictive analytics, and control platform for oil and gas field operations.
+
+### **1.2 Scope**
+OGIM provides end-to-end digital transformation for oil field operations including real-time monitoring, machine learning-driven predictive maintenance, intelligent alerting, and secure command/control capabilities.
+
+### **1.3 Business Objectives**
+- Reduce unplanned downtime by 40%
+- Increase production efficiency by 15%
+- Predictive maintenance cost reduction by 30%
+- Real-time operational intelligence
+- Enhanced safety compliance
 
 ---
 
-## <a name="english"></a>📖 Description (English)
+## **2. System Overview**
 
-### 🎯 About
+### **2.1 Architecture Overview**
 
-OGIM (Oil & Gas Intelligent Monitoring) is a comprehensive real-time monitoring, analytics, and control system for oil and gas fields, built with modern technologies including:
-
-- ✅ **Machine Learning** for anomaly detection and failure prediction
-- ✅ **Stream Processing** with Apache Flink
-- ✅ **Microservices Architecture** with FastAPI
-- ✅ **Modern UI** with React + TypeScript
-- ✅ **Time-Series Database** with TimescaleDB
-- ✅ **Intelligent Alert Management**
-- ✅ **SCADA/PLC Connectivity** via OPC UA & Modbus
-
-### 🚀 Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/parsasohrab1/OGIM---Oil-Gas-Intelligent-Monitoring.git
-cd OGIM---Oil-Gas-Intelligent-Monitoring
-
-# Start with Docker Compose
-docker-compose -f docker-compose.dev.yml up -d
-
-# Generate sample data
-cd data
-python generate_sample_data.py
-
-# Access the web portal
-# http://localhost:3000
+```mermaid
+graph TB
+    A[SCADA/PLC Systems] --> B[Data Ingestion Layer]
+    B --> C[Apache Kafka]
+    C --> D[Stream Processing]
+    D --> E[Analytics & ML]
+    E --> F[Storage Layer]
+    F --> G[API Gateway]
+    G --> H[Web Dashboard]
+    G --> I[Mobile Apps]
+    
+    subgraph "Data Pipeline"
+        B --> C --> D --> E --> F
+    end
+    
+    subgraph "Application Layer"
+        G --> H
+        G --> I
+    end
+    
+    style A fill:#e1f5fe
+    style C fill:#fff3e0
+    style E fill:#e8f5e8
+    style H fill:#f3e5f5
 ```
 
-### 📊 Features
+### **2.2 Technology Stack**
 
-- **Real-Time Monitoring** - 65+ variables tracked per second
-- **Machine Learning** - Anomaly detection & failure prediction
-- **Stream Processing** - Apache Flink for real-time analytics
-- **Alert Management** - Intelligent alerting with deduplication
-- **Command & Control** - 2FA-protected control commands
-- **SCADA Integration** - OPC UA & Modbus TCP support
-- **Data Generation** - Realistic 6-month datasets (62M+ records)
-
-### 📚 Documentation
-
-All documentation is included in this README. Additional technical details can be found in:
-- `/backend/shared/` - Shared modules documentation
-- `/frontend/web/README.md` - Frontend setup guide
-- `/data/README.md` - Data generation guide
-
-### 🛠️ Tech Stack
-
-**Backend:** FastAPI, PostgreSQL, TimescaleDB, Kafka, Flink, MLflow  
-**Frontend:** React, TypeScript, Vite, TanStack Query  
-**Infrastructure:** Docker, Kubernetes, NGINX
-
-### 📝 License
-
-MIT License - see LICENSE file
+| Layer | Technology |
+|-------|------------|
+| **Frontend** | React 18, TypeScript, Vite, Recharts |
+| **Backend** | FastAPI, Python 3.10+, SQLAlchemy |
+| **Data Processing** | Apache Flink, Apache Kafka |
+| **Databases** | PostgreSQL, TimescaleDB, Redis |
+| **ML/AI** | Scikit-learn, MLflow, TensorFlow |
+| **Infrastructure** | Docker, Kubernetes, NGINX |
+| **Connectivity** | OPC UA, Modbus TCP |
 
 ---
 
-<div align="center">
+## **3. Functional Requirements**
 
-**Made with ❤️ for the Oil & Gas Industry**
+### **3.1 Data Acquisition & Ingestion**
 
-⭐ Star us on GitHub | 🐛 Report Issues | 💡 Suggest Features
+#### **FR-101: Multi-Protocol Data Acquisition**
+```mermaid
+graph LR
+    A[OPC UA Servers] --> C[Data Ingestion Service]
+    B[Modbus TCP Devices] --> C
+    D[Legacy SCADA] --> C
+    C --> E[Kafka Topics]
+    E --> F[Data Validation]
+    
+    style C fill:#e1f5fe
+    style E fill:#fff3e0
+```
 
-[GitHub](https://github.com/parsasohrab1/OGIM---Oil-Gas-Intelligent-Monitoring) | [Documentation](#) | [Issues](https://github.com/parsasohrab1/OGIM---Oil-Gas-Intelligent-Monitoring/issues)
+**Requirements:**
+- Support OPC UA, Modbus TCP, REST APIs
+- Handle 10,000+ data points per second
+- Auto-reconnection with exponential backoff
+- Data buffering during network outages
+- Protocol-specific data transformation
 
-</div>
+#### **FR-102: Real-time Data Streaming**
+- Ingest data from 65+ variables per well
+- Support 1-second sampling intervals
+- Handle 100+ concurrent data sources
+- Real-time data validation and cleansing
+
+### **3.2 Real-Time Monitoring (RTM)**
+
+#### **FR-201: Dashboard Visualization**
+```mermaid
+graph TB
+    A[Real-time Data] --> B[Dashboard Engine]
+    B --> C[Operational Overview]
+    B --> D[Well Performance]
+    B --> E[Equipment Health]
+    B --> F[Production Metrics]
+    
+    C --> G[KPI Display]
+    D --> H[Trend Analysis]
+    E --> I[Health Indicators]
+    F --> J[Production Charts]
+    
+    style B fill:#e1f5fe
+    style G fill:#e8f5e8
+    style H fill:#fff3e0
+```
+
+**Requirements:**
+- Real-time data updates (1-10 second intervals)
+- 65+ variable visualization per well
+- Historical trend analysis (1-year data)
+- Interactive charts and gauges
+- Multi-well comparison views
+
+#### **FR-202: Performance Monitoring**
+- Production rate monitoring
+- Equipment efficiency calculations
+- Key performance indicators (KPIs)
+- Real-time operational status
+
+### **3.3 Predictive Maintenance (PdM)**
+
+#### **FR-301: Machine Learning Pipeline**
+```mermaid
+graph TB
+    A[Historical Data] --> B[Feature Engineering]
+    B --> C[Model Training]
+    C --> D[Model Validation]
+    D --> E[MLflow Registry]
+    E --> F[Real-time Inference]
+    F --> G[Predictive Alerts]
+    
+    subgraph "ML Models"
+        H[Anomaly Detection]
+        I[Failure Prediction]
+        J[RUL Estimation]
+    end
+    
+    C --> H
+    C --> I
+    C --> J
+    
+    style C fill:#e1f5fe
+    style F fill:#e8f5e8
+    style G fill:#fff3e0
+```
+
+**Requirements:**
+- Anomaly detection using Isolation Forest
+- Equipment failure prediction (Random Forest)
+- Remaining Useful Life (RUL) estimation
+- Model retraining every 30 days
+- A/B testing for model improvements
+
+#### **FR-302: Maintenance Intelligence**
+- Predictive maintenance scheduling
+- Spare parts optimization
+- Maintenance cost forecasting
+- Work order generation
+
+### **3.4 Data Validation & Reconciliation (DVR)**
+
+#### **FR-401: Data Quality Framework**
+```mermaid
+graph TB
+    A[Raw Data Stream] --> B[Quality Checks]
+    B --> C{Range Validation}
+    B --> D[Completeness Check]
+    B --> E[Rate of Change]
+    B --> F[Statistical Analysis]
+    
+    C --> G[Outlier Detection]
+    D --> G
+    E --> G
+    F --> G
+    
+    G --> H[Data Reconciliation]
+    H --> I[Corrected Data]
+    H --> J[Quality Metrics]
+    
+    style B fill:#e1f5fe
+    style G fill:#fff3e0
+    style H fill:#e8f5e8
+```
+
+**Requirements:**
+- Real-time data validation rules
+- Statistical outlier detection
+- Missing data imputation
+- Data reconciliation algorithms
+- Quality score calculation
+
+#### **FR-402: Sensor Health Monitoring**
+- Sensor drift detection
+- Calibration scheduling
+- Faulty sensor identification
+- Automated sensor health scoring
+
+### **3.5 Alert Management**
+
+#### **FR-501: Intelligent Alerting**
+```mermaid
+graph TB
+    A[Data Stream] --> B[Rule Engine]
+    B --> C[Alert Detection]
+    C --> D[Alert Deduplication]
+    D --> E[Priority Assignment]
+    E --> F[Notification Engine]
+    F --> G[Operator Dashboard]
+    F --> H[Email/SMS]
+    F --> I[Mobile Push]
+    
+    style B fill:#e1f5fe
+    style C fill:#fff3e0
+    style F fill:#e8f5e8
+```
+
+**Requirements:**
+- Configurable alert rules
+- Multi-level severity (Info, Warning, Critical)
+- Alert deduplication and correlation
+- Escalation policies
+- Notification channels (Email, SMS, Push)
+
+#### **FR-502: Alert Analytics**
+- Alert history and trends
+- False positive analysis
+- Alert response time tracking
+- Root cause analysis
+
+### **3.6 Command & Control**
+
+#### **FR-601: Secure Control System**
+```mermaid
+graph TB
+    A[Control Command] --> B[2FA Authentication]
+    B --> C[Approval Workflow]
+    C --> D[Digital Twin Validation]
+    D --> E[Command Execution]
+    E --> F[SCADA/PLC Systems]
+    F --> G[Command Verification]
+    G --> H[Audit Logging]
+    
+    style B fill:#e1f5fe
+    style C fill:#e8f5e8
+    style D fill:#fff3e0
+```
+
+**Requirements:**
+- Two-factor authentication for critical commands
+- Multi-level approval workflows
+- Digital twin simulation before execution
+- Comprehensive audit logging
+- Command rollback capabilities
+
+#### **FR-602: Remote Operations**
+- Setpoint adjustments
+- Equipment start/stop commands
+- Valve control operations
+- Emergency shutdown procedures
 
 ---
 
-**نسخه:** 1.0.0  
-**تاریخ:** نوامبر 2025  
-**وضعیت:** ✅ Production Ready
+## **4. Data Requirements**
+
+### **4.1 Data Model Overview**
+
+#### **DR-101: Well Data Structure**
+```mermaid
+erDiagram
+    WELL ||--o{ WELL_DATA : produces
+    WELL ||--o{ EQUIPMENT : contains
+    WELL ||--o{ ALERT : generates
+    EQUIPMENT ||--o{ SENSOR : has
+    SENSOR ||--o{ SENSOR_DATA : generates
+    
+    WELL {
+        string well_id PK
+        string well_name
+        string well_type
+        string status
+        geography location
+        timestamp commissioning_date
+    }
+    
+    WELL_DATA {
+        string data_id PK
+        string well_id FK
+        timestamp timestamp
+        jsonb measurements
+        float production_rate
+        float efficiency
+    }
+    
+    SENSOR_DATA {
+        string sensor_id FK
+        timestamp timestamp
+        float value
+        string quality
+        string unit
+    }
+```
+
+### **4.2 Data Volume Specifications**
+
+| Data Type | Volume | Retention | Compression |
+|-----------|--------|-----------|-------------|
+| Real-time Sensor Data | 10 GB/day | 2 years | 90% (TimescaleDB) |
+| Historical Analytics | 1 TB/year | 7 years | 70% (PostgreSQL) |
+| Alert & Event Data | 100 MB/day | 5 years | 50% (PostgreSQL) |
+| ML Model Data | 50 GB | Permanent | None |
+| Audit Logs | 500 MB/day | 3 years | 80% (Elasticsearch) |
+
+### **4.3 Data Variables (65+ Parameters)**
+
+| Category | Parameters | Sampling Rate |
+|----------|------------|---------------|
+| **Pressure** | Wellhead, Tubing, Casing, etc. | 1 second |
+| **Temperature** | Wellhead, Separator, Motor, etc. | 1 second |
+| **Flow** | Oil, Gas, Water, Liquid | 1 second |
+| **Composition** | Oil Cut, Water Cut, GOR | 5 seconds |
+| **Vibration** | X/Y/Z axes, Overall | 100 milliseconds |
+| **Electrical** | Voltage, Current, Power Factor | 1 second |
+| **Environmental** | Temp, Pressure, Humidity | 10 seconds |
+
+---
+
+## **5. Non-Functional Requirements**
+
+### **5.1 Performance Requirements**
+
+#### **NF-101: System Performance**
+```mermaid
+graph TB
+    A[Performance Metrics] --> B[Latency Requirements]
+    A --> C[Throughput Requirements]
+    A --> D[Availability Requirements]
+    
+    B --> E[API Response: < 100ms]
+    B --> F[Data Processing: < 1s]
+    B --> G[Alert Generation: < 5s]
+    
+    C --> H[Data Ingestion: 10,000+ events/s]
+    C --> I[Concurrent Users: 500+]
+    
+    D --> J[Uptime: 99.9%]
+    D --> K[Data Loss: < 0.001%]
+    
+    style E fill:#e8f5e8
+    style H fill:#e1f5fe
+    style J fill:#fff3e0
+```
+
+**Requirements:**
+- API response time: < 100ms (95th percentile)
+- Data processing latency: < 1 second
+- Real-time dashboard updates: 1-10 seconds
+- System availability: 99.9% uptime
+- Concurrent users: 500+
+
+### **5.2 Security Requirements**
+
+#### **NF-201: Security Framework**
+```mermaid
+graph TB
+    A[Security Layers] --> B[Authentication]
+    A --> C[Authorization]
+    A --> D[Data Protection]
+    A --> E[Audit & Compliance]
+    
+    B --> F[JWT Tokens]
+    B --> G[2FA]
+    B --> H[SSO Integration]
+    
+    C --> I[RBAC]
+    C --> J[Permission Groups]
+    
+    D --> K[Encryption at Rest]
+    D --> L[Encryption in Transit]
+    D --> M[Data Masking]
+    
+    E --> N[Audit Logging]
+    E --> O[Compliance Reports]
+    
+    style B fill:#e1f5fe
+    style C fill:#e8f5e8
+    style D fill:#fff3e0
+```
+
+**Requirements:**
+- JWT-based authentication
+- Role-Based Access Control (RBAC)
+- Two-factor authentication for critical operations
+- Data encryption at rest and in transit
+- Comprehensive audit logging
+- SOC 2 compliance
+
+### **5.3 Scalability Requirements**
+
+#### **NF-301: Scalability Architecture**
+```mermaid
+graph TB
+    A[Scalability Dimensions] --> B[Horizontal Scaling]
+    A --> C[Vertical Scaling]
+    A --> D[Database Scaling]
+    
+    B --> E[Microservices Architecture]
+    B --> F[Load Balancing]
+    B --> G[Auto-scaling Groups]
+    
+    C --> H[Resource Optimization]
+    C --> I[Performance Tuning]
+    
+    D --> J[Read Replicas]
+    D --> K[Sharding]
+    D --> L[Partitioning]
+    
+    style E fill:#e1f5fe
+    style F fill:#e8f5e8
+    style J fill:#fff3e0
+```
+
+**Requirements:**
+- Horizontal scaling for all microservices
+- Database read replicas for analytics
+- Time-series data partitioning
+- Support for 100+ wells
+- 10x data volume growth handling
+
+### **5.4 Reliability Requirements**
+
+- Mean Time Between Failures (MTBF): > 720 hours
+- Mean Time To Repair (MTTR): < 1 hour
+- Data backup and recovery: < 4 hours
+- Disaster recovery: < 24 hours
+
+---
+
+## **6. Integration Requirements**
+
+### **6.1 External System Integration**
+
+#### **IR-101: SCADA/PLC Integration**
+```mermaid
+sequenceDiagram
+    participant S as SCADA System
+    participant D as Data Ingestion
+    participant K as Kafka
+    participant P as Processing
+    
+    S->>D: OPC UA Data Stream
+    D->>K: Raw Data Publication
+    K->>P: Data Consumption
+    P->>P: Data Validation
+    P->>K: Validated Data
+    Note over D,K: Real-time 1-second intervals
+```
+
+**Requirements:**
+- OPC UA client connectivity
+- Modbus TCP protocol support
+- Legacy SCADA system integration
+- Real-time data synchronization
+- Protocol conversion and normalization
+
+### **6.2 Third-Party Integrations**
+
+- ERP systems (SAP, Oracle)
+- Maintenance management systems
+- Weather data services
+- Regulatory reporting systems
+- Mobile workforce applications
+
+---
+
+## **7. Deployment Architecture**
+
+### **7.1 Infrastructure Overview**
+
+#### **IR-201: Cloud Deployment**
+```mermaid
+graph TB
+    A[Load Balancer] --> B[API Gateway]
+    B --> C[Frontend CDN]
+    B --> D[Backend Services]
+    
+    D --> E[Auth Service]
+    D --> F[Data Service]
+    D --> G[ML Service]
+    D --> H[Alert Service]
+    
+    E --> I[PostgreSQL]
+    F --> J[TimescaleDB]
+    G --> K[Redis Cache]
+    H --> L[Message Queue]
+    
+    subgraph "Data Layer"
+        I
+        J
+        K
+        L
+    end
+    
+    style A fill:#e1f5fe
+    style B fill:#e8f5e8
+    style D fill:#fff3e0
+```
+
+### **7.2 High Availability**
+
+- Multi-availability zone deployment
+- Database replication and failover
+- Automated backup systems
+- Monitoring and alerting
+- Disaster recovery procedures
+
+---
+
+## **8. Compliance & Standards**
+
+### **8.1 Regulatory Compliance**
+
+- NORSOK standards compliance
+- ISO 14224 (Petroleum reliability data)
+- ISA-95 (Enterprise-control system integration)
+- GDPR data protection requirements
+- Local regulatory requirements
+
+### **8.2 Industry Standards**
+
+- OPC UA for industrial communication
+- REST API design standards
+- Microservices architecture patterns
+- DevOps and CI/CD practices
+- Agile development methodology
+
+---
+
+## **9. Testing Requirements**
+
+### **9.1 Testing Strategy**
+
+#### **TR-101: Comprehensive Testing**
+```mermaid
+graph TB
+    A[Testing Pyramid] --> B[Unit Testing]
+    A --> C[Integration Testing]
+    A --> D[System Testing]
+    A --> E[Acceptance Testing]
+    
+    B --> F[Code Coverage: 85%+]
+    B --> G[Test Automation]
+    
+    C --> H[API Testing]
+    C --> I[Database Testing]
+    
+    D --> J[Performance Testing]
+    D --> K[Security Testing]
+    
+    E --> L[UAT with Operators]
+    E --> M[Production Validation]
+    
+    style B fill:#e1f5fe
+    style D fill:#e8f5e8
+    style E fill:#fff3e0
+```
+
+**Requirements:**
+- Unit test coverage: 85% minimum
+- Integration testing for all APIs
+- Performance and load testing
+- Security penetration testing
+- User acceptance testing (UAT)
+
+---
+
+## **10. Maintenance & Support**
+
+### **10.1 Operational Support**
+
+- 24/7 monitoring and alerting
+- SLAs for different priority levels
+- Regular maintenance windows
+- Patch and update management
+- Performance optimization
+
+### **10.2 Training & Documentation**
+
+- Comprehensive user documentation
+- Administrator guides
+- API documentation
+- Training materials for operators
+- Troubleshooting guides
+
+---
+
+## **Appendices**
+
+### **Appendix A: Data Dictionary**
+Complete specification of all 65+ data variables with units, ranges, and sampling rates.
+
+### **Appendix B: API Specifications**
+Detailed REST API documentation with endpoints, request/response formats, and authentication.
+
+### **Appendix C: Security Protocols**
+Comprehensive security implementation details including encryption standards and access controls.
+
+### **Appendix D: Deployment Guides**
+Step-by-step deployment instructions for development, staging, and production environments.
+
