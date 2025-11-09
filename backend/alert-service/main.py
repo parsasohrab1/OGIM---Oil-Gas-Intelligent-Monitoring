@@ -5,7 +5,7 @@ Manages alert rules, de-duplication, escalation, and silencing
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uvicorn
 import sys
@@ -14,17 +14,23 @@ import os
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
-from database import get_db, init_db
+from database import get_db
 from models import Alert, AlertRule, User
 from config import settings
 from logging_config import setup_logging
 from kafka_utils import KafkaProducerWrapper, KAFKA_TOPICS
+from auth import require_authentication, require_roles
+from tracing import setup_tracing
+from metrics import setup_metrics
 from sqlalchemy.orm import Session
 
 # Setup logging
 logger = setup_logging("alert-service")
 
 app = FastAPI(title="OGIM Alert Service", version="1.0.0")
+
+setup_tracing(app, "alert-service")
+setup_metrics(app, "alert-service")
 
 # CORS Configuration
 app.add_middleware(
@@ -50,6 +56,23 @@ class AlertCreate(BaseModel):
     rule_name: str
 
 
+class AlertResponse(BaseModel):
+    alert_id: str
+    timestamp: datetime
+    severity: str
+    status: str
+    well_name: str
+    tag_id: Optional[str] = None
+    message: str
+    rule_name: str
+    acknowledged_by_id: Optional[int] = None
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class AlertRuleCreate(BaseModel):
     rule_id: str
     name: str
@@ -60,15 +83,33 @@ class AlertRuleCreate(BaseModel):
     enabled: bool = True
 
 
+class AlertRuleResponse(BaseModel):
+    rule_id: str
+    name: str
+    description: Optional[str] = None
+    condition: str
+    threshold: Optional[float] = None
+    severity: str
+    enabled: bool
+
+    class Config:
+        from_attributes = True
+
+
+# Role dependencies
+require_alert_read = require_authentication
+require_alert_write = require_roles({"system_admin", "field_operator", "data_engineer"})
+require_alert_admin = require_roles({"system_admin"})
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and Kafka on startup"""
     global alert_producer
     logger.info("Starting alert service...")
     try:
-        init_db()
         alert_producer = KafkaProducerWrapper(KAFKA_TOPICS["ALERTS"])
-        logger.info("Alert service initialized successfully")
+        logger.info("Alert service ready. Ensure database migrations are applied.")
     except Exception as e:
         logger.error(f"Failed to initialize alert service: {e}")
 
@@ -81,7 +122,11 @@ async def shutdown_event():
 
 
 @app.post("/alerts", status_code=201)
-async def create_alert(alert: AlertCreate, db: Session = Depends(get_db)):
+async def create_alert(
+    alert: AlertCreate,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_write)
+):
     """Create a new alert"""
     # De-duplication: check if similar alert exists
     existing = db.query(Alert).filter(
@@ -127,7 +172,8 @@ async def list_alerts(
     status: Optional[str] = None,
     severity: Optional[str] = None,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_read)
 ):
     """List alerts with optional filtering"""
     query = db.query(Alert).order_by(Alert.timestamp.desc())
@@ -140,14 +186,20 @@ async def list_alerts(
         query = query.filter(Alert.severity == severity)
     
     alerts = query.limit(limit).all()
-    return {"alerts": alerts, "count": len(alerts)}
+    return {
+        "alerts": [
+            AlertResponse.model_validate(alert).model_dump()
+            for alert in alerts
+        ],
+        "count": len(alerts)
+    }
 
 
 @app.post("/alerts/{alert_id}/acknowledge")
 async def acknowledge_alert(
     alert_id: str,
-    acknowledged_by: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require_alert_write)
 ):
     """Acknowledge an alert"""
     alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
@@ -155,7 +207,11 @@ async def acknowledge_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
     
     # Get user
-    user = db.query(User).filter(User.username == acknowledged_by).first()
+    username = claims.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
@@ -164,13 +220,17 @@ async def acknowledge_alert(
     alert.acknowledged_at = datetime.utcnow()
     
     db.commit()
-    logger.info(f"Alert acknowledged: {alert_id} by {acknowledged_by}")
+    logger.info(f"Alert acknowledged: {alert_id} by {username}")
     
     return {"message": "Alert acknowledged", "alert_id": alert_id}
 
 
 @app.post("/alerts/{alert_id}/resolve")
-async def resolve_alert(alert_id: str, db: Session = Depends(get_db)):
+async def resolve_alert(
+    alert_id: str,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_admin)
+):
     """Resolve an alert"""
     alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
     if not alert:
@@ -186,7 +246,11 @@ async def resolve_alert(alert_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/rules")
-async def create_rule(rule: AlertRuleCreate, db: Session = Depends(get_db)):
+async def create_rule(
+    rule: AlertRuleCreate,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_admin)
+):
     """Create an alert rule"""
     db_rule = AlertRule(**rule.dict())
     db.add(db_rule)
@@ -198,7 +262,11 @@ async def create_rule(rule: AlertRuleCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/rules")
-async def list_rules(enabled: Optional[bool] = None, db: Session = Depends(get_db)):
+async def list_rules(
+    enabled: Optional[bool] = None,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_read)
+):
     """List all alert rules"""
     query = db.query(AlertRule)
     
@@ -206,7 +274,13 @@ async def list_rules(enabled: Optional[bool] = None, db: Session = Depends(get_d
         query = query.filter(AlertRule.enabled == enabled)
     
     rules = query.all()
-    return {"rules": rules, "count": len(rules)}
+    return {
+        "rules": [
+            AlertRuleResponse.model_validate(rule).model_dump()
+            for rule in rules
+        ],
+        "count": len(rules)
+    }
 
 
 @app.get("/health")

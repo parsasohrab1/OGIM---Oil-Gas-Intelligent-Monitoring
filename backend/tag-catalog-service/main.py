@@ -5,7 +5,7 @@ Central repository for well/tag metadata, units, and valid ranges
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 import uvicorn
 import sys
@@ -14,16 +14,26 @@ import os
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
-from database import get_db, init_db
+from database import get_db
 from models import Tag
 from config import settings
 from logging_config import setup_logging
 from sqlalchemy.orm import Session
+from auth import require_authentication, require_roles
+from metrics import setup_metrics
+from tracing import setup_tracing
+# Role-based dependencies
+require_tag_read = require_authentication
+require_tag_write = require_roles({"system_admin", "data_engineer"})
+require_tag_admin = require_roles({"system_admin"})
 
 # Setup logging
 logger = setup_logging("tag-catalog-service")
 
 app = FastAPI(title="OGIM Tag Catalog Service", version="1.0.0")
+
+setup_tracing(app, "tag-catalog-service")
+setup_metrics(app, "tag-catalog-service")
 
 # CORS Configuration
 app.add_middleware(
@@ -54,7 +64,6 @@ class TagMetadata(BaseModel):
 
 
 class TagResponse(BaseModel):
-    id: int
     tag_id: str
     well_name: str
     equipment_type: str
@@ -62,8 +71,15 @@ class TagResponse(BaseModel):
     unit: str
     valid_range_min: float
     valid_range_max: float
+    critical_threshold_min: Optional[float] = None
+    critical_threshold_max: Optional[float] = None
+    warning_threshold_min: Optional[float] = None
+    warning_threshold_max: Optional[float] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
     status: str
-    
+    last_calibration: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
@@ -73,17 +89,17 @@ async def startup_event():
     """Initialize database on startup"""
     logger.info("Starting tag catalog service...")
     try:
-        init_db()
-        logger.info("Database initialized successfully")
+        logger.info("Tag catalog service ready. Ensure database migrations are applied.")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Startup error: {e}")
 
 
 @app.get("/tags")
 async def list_tags(
     well_name: Optional[str] = None,
     status: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_tag_read)
 ):
     """List all tags with optional filtering"""
     query = db.query(Tag)
@@ -94,20 +110,31 @@ async def list_tags(
         query = query.filter(Tag.status == status)
     
     tags = query.all()
-    return {"tags": tags, "count": len(tags)}
+    return {
+        "tags": [TagResponse.model_validate(tag).model_dump() for tag in tags],
+        "count": len(tags)
+    }
 
 
 @app.get("/tags/{tag_id}")
-async def get_tag(tag_id: str, db: Session = Depends(get_db)):
+async def get_tag(
+    tag_id: str,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_tag_read)
+):
     """Get tag metadata by ID"""
     tag = db.query(Tag).filter(Tag.tag_id == tag_id).first()
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
-    return tag
+    return TagResponse.model_validate(tag)
 
 
 @app.post("/tags", status_code=201)
-async def create_tag(tag: TagMetadata, db: Session = Depends(get_db)):
+async def create_tag(
+    tag: TagMetadata,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_tag_write)
+):
     """Create or update tag metadata"""
     # Check if tag exists
     existing_tag = db.query(Tag).filter(Tag.tag_id == tag.tag_id).first()
@@ -131,7 +158,12 @@ async def create_tag(tag: TagMetadata, db: Session = Depends(get_db)):
 
 
 @app.put("/tags/{tag_id}")
-async def update_tag(tag_id: str, tag: TagMetadata, db: Session = Depends(get_db)):
+async def update_tag(
+    tag_id: str,
+    tag: TagMetadata,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_tag_write)
+):
     """Update tag metadata"""
     db_tag = db.query(Tag).filter(Tag.tag_id == tag_id).first()
     if not db_tag:
@@ -147,7 +179,11 @@ async def update_tag(tag_id: str, tag: TagMetadata, db: Session = Depends(get_db
 
 
 @app.delete("/tags/{tag_id}")
-async def delete_tag(tag_id: str, db: Session = Depends(get_db)):
+async def delete_tag(
+    tag_id: str,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_tag_admin)
+):
     """Delete tag (soft delete by setting status)"""
     db_tag = db.query(Tag).filter(Tag.tag_id == tag_id).first()
     if not db_tag:

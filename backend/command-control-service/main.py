@@ -5,7 +5,7 @@ Manages command queue, two-factor approval, and status feedback
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from datetime import datetime
 import uvicorn
 import sys
@@ -14,17 +14,23 @@ import os
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
-from database import get_db, init_db
+from database import get_db
 from models import Command, User, AuditLog
 from config import settings
 from logging_config import setup_logging
 from kafka_utils import KafkaProducerWrapper, KAFKA_TOPICS
+from auth import require_authentication, require_roles
+from metrics import setup_metrics
+from tracing import setup_tracing
 from sqlalchemy.orm import Session
 
 # Setup logging
 logger = setup_logging("command-control-service")
 
 app = FastAPI(title="OGIM Command & Control Service", version="1.0.0")
+
+setup_tracing(app, "command-control-service")
+setup_metrics(app, "command-control-service")
 
 # CORS Configuration
 app.add_middleware(
@@ -48,15 +54,36 @@ class CommandRequest(BaseModel):
     requires_two_factor: bool = True
 
 
+class CommandResponse(BaseModel):
+    command_id: str
+    timestamp: datetime
+    well_name: str
+    equipment_id: str
+    command_type: str
+    parameters: Dict[str, Any]
+    status: str
+    requested_by_id: int
+    approved_by_id: Optional[int] = None
+    executed_at: Optional[datetime] = None
+    requires_two_factor: bool
+
+    class Config:
+        from_attributes = True
+
+
+# Role dependencies
+require_command_read = require_roles({"system_admin", "field_operator", "operator"})
+require_command_admin = require_roles({"system_admin"})
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and Kafka on startup"""
     global command_producer
     logger.info("Starting command control service...")
     try:
-        init_db()
         command_producer = KafkaProducerWrapper(KAFKA_TOPICS["CONTROL_COMMANDS"])
-        logger.info("Command control service initialized successfully")
+        logger.info("Command control service ready. Ensure database migrations are applied.")
     except Exception as e:
         logger.error(f"Failed to initialize command control service: {e}")
 
@@ -71,13 +98,18 @@ async def shutdown_event():
 @app.post("/commands")
 async def create_command(
     request: CommandRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require_command_read)
 ):
     """Create a control command"""
     # Get user
     user = db.query(User).filter(User.username == request.requested_by).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    requester_username = claims.get("sub")
+    if requester_username != user.username:
+        raise HTTPException(status_code=403, detail="Cannot create command for another user")
     
     command_id = f"CMD-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{user.id}"
     
@@ -119,8 +151,8 @@ async def create_command(
 @app.post("/commands/{command_id}/approve")
 async def approve_command(
     command_id: str,
-    approved_by: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require_command_admin)
 ):
     """Approve a command (two-factor approval)"""
     # Get command
@@ -132,7 +164,8 @@ async def approve_command(
         raise HTTPException(status_code=400, detail=f"Command already {command.status}")
     
     # Get approver
-    approver = db.query(User).filter(User.username == approved_by).first()
+    username = claims.get("sub")
+    approver = db.query(User).filter(User.username == username).first()
     if not approver:
         raise HTTPException(status_code=404, detail="User not found")
     
@@ -140,7 +173,7 @@ async def approve_command(
     if command.requested_by_id == approver.id:
         raise HTTPException(
             status_code=400,
-            detail="Cannot approve own command (two-person rule)"
+        detail="Cannot approve own command (two-person rule)"
         )
     
     # Update command
@@ -154,20 +187,24 @@ async def approve_command(
         action="approve_command",
         resource_type="command",
         resource_id=command_id,
-        details={"approved_by": approved_by},
+        details={"approved_by": username},
         status="success"
     )
     db.add(audit)
     
     db.commit()
     
-    logger.info(f"Command approved: {command_id} by {approved_by}")
+    logger.info(f"Command approved: {command_id} by {username}")
     
     return {"command_id": command_id, "status": "approved"}
 
 
 @app.post("/commands/{command_id}/execute")
-async def execute_command(command_id: str, db: Session = Depends(get_db)):
+async def execute_command(
+    command_id: str,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_command_admin)
+):
     """Execute an approved command"""
     command = db.query(Command).filter(Command.command_id == command_id).first()
     if not command:
@@ -230,7 +267,8 @@ async def list_commands(
     well_name: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_command_read)
 ):
     """List commands"""
     query = db.query(Command).order_by(Command.timestamp.desc())
@@ -241,16 +279,26 @@ async def list_commands(
         query = query.filter(Command.status == status)
     
     commands = query.limit(limit).all()
-    return {"commands": commands, "count": len(commands)}
+    return {
+        "commands": [
+            CommandResponse.model_validate(command).model_dump()
+            for command in commands
+        ],
+        "count": len(commands)
+    }
 
 
 @app.get("/commands/{command_id}")
-async def get_command(command_id: str, db: Session = Depends(get_db)):
+async def get_command(
+    command_id: str,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_command_read)
+):
     """Get command by ID"""
     command = db.query(Command).filter(Command.command_id == command_id).first()
     if not command:
         raise HTTPException(status_code=404, detail="Command not found")
-    return command
+    return CommandResponse.model_validate(command)
 
 
 @app.get("/health")

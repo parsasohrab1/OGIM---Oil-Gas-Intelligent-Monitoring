@@ -7,11 +7,12 @@ import os
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tag-catalog-service'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from main import app
-from database import get_db
-from models import Tag
+from main import app, require_tag_read, require_tag_write, require_tag_admin
+from shared.database import get_db
+from shared.models import Tag
+from shared.auth import require_authentication, require_roles
 
 
 def override_get_db(test_db):
@@ -28,6 +29,9 @@ def override_get_db(test_db):
 def client(test_db):
     """Create test client"""
     app.dependency_overrides[get_db] = override_get_db(test_db)
+    app.dependency_overrides[require_tag_read] = lambda: {"sub": "testuser", "role": "system_admin"}
+    app.dependency_overrides[require_tag_write] = lambda: {"sub": "testuser", "role": "system_admin"}
+    app.dependency_overrides[require_tag_admin] = lambda: {"sub": "testuser", "role": "system_admin"}
     return TestClient(app)
 
 

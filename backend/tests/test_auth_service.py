@@ -7,11 +7,13 @@ import os
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'auth-service'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from main import app
-from database import get_db
-from security import get_password_hash, verify_password
+from shared.database import get_db
+from shared.security import get_password_hash, verify_password
+from shared.token_store import refresh_token_store
+from rate_limiter import rate_limit_dependency
 
 
 def override_get_db(test_db):
@@ -28,7 +30,13 @@ def override_get_db(test_db):
 def client(test_db):
     """Create test client"""
     app.dependency_overrides[get_db] = override_get_db(test_db)
+    app.dependency_overrides[rate_limit_dependency] = lambda: True
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_token_store():
+    refresh_token_store.reset()
 
 
 def test_password_hashing():
@@ -84,7 +92,7 @@ def test_get_current_user_no_token(client):
 
 def test_create_user_as_admin(client, test_db):
     """Test creating user as admin"""
-    from models import User
+    from shared.models import User
     
     # Create admin user
     admin = User(
@@ -98,7 +106,7 @@ def test_create_user_as_admin(client, test_db):
     test_db.commit()
     
     # Get admin token
-    from security import create_access_token
+    from shared.security import create_access_token
     admin_token = create_access_token(data={"sub": "admin", "role": "system_admin"})
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
     

@@ -7,3 +7,8 @@ pydantic-settings==2.1.0
 confluent-kafka==2.3.0
 opcua==0.98.13
 pymodbus==3.5.4
+prometheus-client==0.17.1
+opentelemetry-sdk==1.20.0
+opentelemetry-exporter-otlp==1.20.0
+opentelemetry-instrumentation-fastapi==0.41b0
+opentelemetry-instrumentation-requests==0.41b0

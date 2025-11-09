@@ -19,6 +19,7 @@ from config import settings
 from logging_config import setup_logging
 from shared.auth import require_roles
 from metrics import setup_metrics
+from tracing import setup_tracing
 
 try:
     from prometheus_client import Counter, Histogram
@@ -57,6 +58,7 @@ except ImportError:
 
 app = FastAPI(title="OGIM ML Inference Service", version="1.0.0")
 setup_metrics(app, "ml-inference-service")
+setup_tracing(app, "ml-inference-service")
 
 # CORS Configuration
 app.add_middleware(
@@ -285,14 +287,6 @@ async def reload_models(
 
     results = mlflow_manager.load_registered_models()
     return {"loaded": results}
-
-
-@app.get("/metrics")
-async def metrics():
-    """Prometheus metrics endpoint."""
-    if not METRICS_ENABLED:
-        raise HTTPException(status_code=503, detail="Prometheus client not available")
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")

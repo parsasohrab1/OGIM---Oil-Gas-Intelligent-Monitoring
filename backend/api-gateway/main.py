@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
 from config import settings
 from security import decode_token
+from metrics import setup_metrics
+from tracing import setup_tracing
 
 app = FastAPI(
     title="OGIM API Gateway",
@@ -28,6 +30,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
+setup_metrics(app, "api-gateway")
+setup_tracing(app, "api-gateway", instrument_httpx=True)
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,

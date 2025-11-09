@@ -1,0 +1,20 @@
+groups:
+  - name: ml-model-quality
+    rules:
+      - alert: ModelAccuracyLow
+        expr: model_metric_value{metric="accuracy"} < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model accuracy below threshold"
+          description: "Model {{ $labels.model }} has accuracy {{ $value }} below 0.8"
+
+      - alert: ModelRetrainOverdue
+        expr: time() - model_last_retrain_timestamp_seconds > 30 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model retraining overdue"
+          description: "Model {{ $labels.model }} has not been retrained in the last 30 days."

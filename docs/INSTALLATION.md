@@ -102,6 +102,9 @@ MLFLOW_TRACKING_URI=http://mlflow:5000
 
 # OPC UA
 OPCUA_SERVER_URL=opc.tcp://localhost:4840
+
+# ML Models
+MODEL_STORAGE_PATH=/app/models
 ```
 
 ### 3️⃣ راه‌اندازی سرویس‌ها
@@ -322,6 +325,14 @@ Frontend در آدرس http://localhost:3000 در دسترس خواهد بود.
 
 ## <a name="initial-configuration"></a>⚙️ تنظیمات اولیه
 
+### پیکربندی محیطی
+
+راهنمای انتخاب فایل‌های env و مدیریت secret ها در [`docs/CONFIGURATION.md`](CONFIGURATION.md) موجود است؛ قبل از اجرای سرویس‌ها، فایل مناسب (development/production) را ایجاد کنید.
+
+### راهنمای توسعه‌دهندگان
+
+برای فرآیند توسعه محلی، گردش کار Git و اجرای lint/test، به [`docs/DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md) مراجعه کنید.
+
 ### 1️⃣ کاربران پیش‌فرض
 
 پس از اجرای `init_db.py`، کاربران زیر ایجاد می‌شوند:
@@ -361,12 +372,66 @@ mlflow server \
   --port 5000
 ```
 
-### 4️⃣ تولید داده نمونه
+### 4️⃣ آموزش مدل‌های ML
+
+سرویس `ml-inference` دیگر در هنگام راه‌اندازی مدل‌ها را آموزش نمی‌دهد. برای تولید یا به‌روزرسانی مدل‌ها:
+
+```bash
+python scripts/train_models.py --model all          # آموزش همه مدل‌ها
+python scripts/train_models.py --model anomaly_detection
+python scripts/train_models.py --model failure_prediction
+```
+
+> **نکته:** در محیط‌های Production مقدار `MODEL_STORAGE_PATH` را روی یک Volume پایدار نگاشت کنید تا مدل‌های آموزش‌دیده پس از ری‌استارت از بین نروند.
+
+پس از استقرار، در صورت نیاز می‌توانید با توکن ادمین درخواست زیر را برای بارگذاری مجدد مدل‌های رجیستری اجرا کنید:
+
+```bash
+curl -X POST http://localhost:8004/models/reload \
+  -H "Authorization: Bearer <SYSTEM_ADMIN_TOKEN>"
+```
+
+### 5️⃣ اجرای مهاجرت‌های پایگاه داده
+
+سرویس‌ها دیگر جداول را هنگام استارتاپ ایجاد نمی‌کنند. پیش از اجرای سرویس‌ها، migrationها را با Alembic اعمال کنید:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+> متغیر `SQLALCHEMY_DATABASE_URL` یا `DATABASE_URL` باید به پایگاه داده هدف اشاره کند.
+
+### 6️⃣ تولید داده نمونه
 
 ```bash
 cd data
 python generate_sample_data.py
 ```
+
+### 7️⃣ نقش‌ها و سیاست‌های دسترسی
+
+برای آشنایی با نقش‌ها و سطح دسترسی هر سرویس، فایل [`docs/SECURITY_ROLES.md`](SECURITY_ROLES.md) را مطالعه کنید و مطمئن شوید توکن‌های تولیدی با نقش‌های مناسب استفاده می‌شوند.
+
+### 8️⃣ Observability (Prometheus/Grafana)
+
+برای راه‌اندازی Prometheus، Grafana و متریک‌های هر سرویس، به راهنمای [`docs/OBSERVABILITY.md`](OBSERVABILITY.md) مراجعه کنید. نمونه پیکربندی Prometheus در `infrastructure/prometheus/prometheus.yml` آماده است. دستورالعمل Tracing نیز در همان راهنما و جزئیات کامل‌تر در [`docs/TRACING.md`](TRACING.md) موجود است.
+
+### 9️⃣ لاگ‌ها و تجمیع
+
+فرمت JSON و نحوه‌ی ارسال لاگ‌ها به Loki یا ELK در [`docs/LOGGING.md`](LOGGING.md) آمده است. برای Dev می‌توانید از Promtail نمونه (`infrastructure/logging/promtail-config.yaml`) استفاده کنید.
+
+### 10️⃣ تست
+
+برای اجرای تست‌ها و مشاهده گزارش پوشش، به [`docs/TESTING.md`](TESTING.md) مراجعه کنید؛ اجرای `pytest` در پوشه `backend/` حداقل پوشش 60٪ را enforced می‌کند.
+
+### 11️⃣ CI/CD
+
+برای Pipeline GitHub Actions شامل lint، تست و بررسی migration به [`docs/CI_CD.md`](CI_CD.md) مراجعه کنید. این فایل نحوه‌ی پیکربندی متغیرها و اجرای دستی مراحل را توضیح می‌دهد.
+
+### 12️⃣ Handoff
+
+برای خلاصهٔ QA/Ops شامل پوشش تست، وضعیت pipeline و گام‌های rollout به [`docs/HANDOFF.md`](HANDOFF.md) مراجعه کنید.
 
 ---
 
@@ -421,6 +486,7 @@ curl http://localhost:8001/health  # Auth Service
 curl http://localhost:8002/health  # Data Ingestion
 curl http://localhost:8003/health  # Alert Service
 curl http://localhost:8004/health  # ML Inference
+curl http://localhost:8004/metrics # متریک‌های Prometheus (در صورت فعال بودن)
 ```
 
 ### 2️⃣ تست Authentication

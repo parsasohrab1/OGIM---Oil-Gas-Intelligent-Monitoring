@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 import uvicorn
 import sys
@@ -15,7 +15,7 @@ import os
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
-from database import get_db, init_db
+from database import get_db
 from models import User
 from security import (
     verify_password,
@@ -25,11 +25,17 @@ from security import (
     decode_token,
     generate_2fa_secret,
     verify_2fa_token,
-    generate_2fa_qr_code_uri
+    generate_2fa_qr_code_uri,
+    extract_token_jti,
 )
 from config import settings
 from logging_config import setup_logging
 from sqlalchemy.orm import Session
+from rate_limiter import rate_limit_dependency
+from token_store import refresh_token_store
+from security_alerts import security_alerts
+from metrics import setup_metrics
+from tracing import setup_tracing
 
 # Setup logging
 logger = setup_logging("auth-service")
@@ -40,6 +46,8 @@ app = FastAPI(
     description="Authentication and Authorization Service"
 )
 
+setup_metrics(app, "auth-service")
+setup_tracing(app, "auth-service")
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
@@ -136,23 +144,21 @@ async def get_current_active_admin(
 async def startup_event():
     """Initialize database on startup"""
     logger.info("Starting auth service...")
-    try:
-        init_db()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+    logger.info("Ensure database migrations are applied before accepting traffic.")
 
 
 @app.post("/token", response_model=Token)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: bool = Depends(rate_limit_dependency)
 ):
     """Authenticate user and return access token"""
     user = db.query(User).filter(User.username == form_data.username).first()
     
     if not user or not verify_password(form_data.password, user.hashed_password):
         logger.warning(f"Failed login attempt for user: {form_data.username}")
+        security_alerts.record_login_failure(form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -169,6 +175,11 @@ async def login(
     refresh_token = create_refresh_token(
         data={"sub": user.username}
     )
+    refresh_payload = decode_token(refresh_token)
+    refresh_jti = extract_token_jti(refresh_payload)
+    expires_at = datetime.utcfromtimestamp(refresh_payload["exp"])
+    refresh_token_store.register_token(refresh_jti, expires_at)
+    security_alerts.reset_user(user.username)
     
     logger.info(f"User logged in: {user.username}")
     
@@ -195,6 +206,10 @@ async def refresh_token(
         
         if not user or user.disabled:
             raise HTTPException(status_code=401, detail="Invalid token")
+
+        old_jti = extract_token_jti(payload)
+        if not refresh_token_store.is_token_active(old_jti):
+            raise HTTPException(status_code=401, detail="Refresh token revoked or expired")
         
         # Create new tokens
         new_access_token = create_access_token(
@@ -203,6 +218,14 @@ async def refresh_token(
         new_refresh_token = create_refresh_token(
             data={"sub": user.username}
         )
+        new_payload = decode_token(new_refresh_token)
+        new_jti = extract_token_jti(new_payload)
+        new_exp = datetime.utcfromtimestamp(new_payload["exp"])
+
+        # revoke old token and register new one
+        if old_jti:
+            refresh_token_store.revoke_token(old_jti, datetime.utcfromtimestamp(payload["exp"]))
+        refresh_token_store.register_token(new_jti, new_exp)
         
         return {
             "access_token": new_access_token,

@@ -8,11 +8,11 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'alert-service'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from main import app
-from database import get_db
-from models import Alert, AlertRule
+from main import app, require_alert_read, require_alert_write, require_alert_admin
+from shared.database import get_db
+from shared.models import Alert, AlertRule
 
 
 def override_get_db(test_db):
@@ -29,6 +29,9 @@ def override_get_db(test_db):
 def client(test_db):
     """Create test client"""
     app.dependency_overrides[get_db] = override_get_db(test_db)
+    app.dependency_overrides[require_alert_read] = lambda: {"sub": "testuser", "role": "system_admin"}
+    app.dependency_overrides[require_alert_write] = lambda: {"sub": "testuser", "role": "system_admin"}
+    app.dependency_overrides[require_alert_admin] = lambda: {"sub": "testuser", "role": "system_admin"}
     return TestClient(app)
 
 

@@ -2,9 +2,41 @@
 Shared configuration management
 """
 import os
+from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+CONFIG_DIR = ROOT_DIR / "config"
+DEFAULT_ENV_FILE = ROOT_DIR / ".env"
+
+_env_file_override = os.getenv("OGIM_ENV_FILE")
+env_name = os.getenv("ENVIRONMENT", "development").lower()
+search_candidates = []
+if _env_file_override:
+    candidate_env_file = Path(_env_file_override)
+    if not candidate_env_file.is_absolute():
+        candidate_env_file = ROOT_DIR / candidate_env_file
+    search_candidates.append(candidate_env_file)
+else:
+    search_candidates.extend([
+        CONFIG_DIR / f".env.{env_name}",
+        CONFIG_DIR / f"{env_name}.env",
+    ])
+
+candidate_env_file = None
+for candidate in search_candidates:
+    if candidate.exists():
+        candidate_env_file = candidate
+        break
+    example_candidate = candidate.with_name(candidate.name + ".example")
+    if example_candidate.exists():
+        candidate_env_file = example_candidate
+        break
+
+if candidate_env_file is None:
+    candidate_env_file = DEFAULT_ENV_FILE
 
 
 class Settings(BaseSettings):
@@ -81,7 +113,7 @@ class Settings(BaseSettings):
     MLFLOW_TRACKING_URI: Optional[str] = Field(default=None, env="MLFLOW_TRACKING_URI")
     
     class Config:
-        env_file = ".env"
+        env_file = candidate_env_file
         case_sensitive = True
 
 

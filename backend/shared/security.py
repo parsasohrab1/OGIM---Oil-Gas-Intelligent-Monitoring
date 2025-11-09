@@ -7,6 +7,7 @@ import jwt
 from passlib.context import CryptContext
 import pyotp
 import secrets
+from uuid import uuid4
 
 from .config import settings
 
@@ -36,7 +37,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({
         "exp": expire,
         "iat": datetime.utcnow(),
-        "type": "access"
+        "type": "access",
+        "jti": str(uuid4())
     })
     
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -51,7 +53,8 @@ def create_refresh_token(data: dict) -> str:
     to_encode.update({
         "exp": expire,
         "iat": datetime.utcnow(),
-        "type": "refresh"
+        "type": "refresh",
+        "jti": str(uuid4())
     })
     
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -89,4 +92,9 @@ def generate_2fa_qr_code_uri(secret: str, email: str) -> str:
 def generate_api_key() -> str:
     """Generate a secure API key"""
     return secrets.token_urlsafe(32)
+
+
+def extract_token_jti(payload: dict) -> Optional[str]:
+    """Return token JTI if present."""
+    return payload.get("jti")
 

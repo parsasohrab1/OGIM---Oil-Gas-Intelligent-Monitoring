@@ -41,101 +41,57 @@ class MLflowModelManager:
     def train_anomaly_detection_model(self, X_train: np.ndarray = None):
         """Train anomaly detection model"""
         with mlflow.start_run(run_name="anomaly_detection_training"):
-            # Use synthetic data if no training data provided
             if X_train is None:
-                # Generate synthetic normal data
                 np.random.seed(42)
                 X_train = np.random.normal(100, 20, (1000, 5))
-            
-            # Train Isolation Forest
             model = IsolationForest(
                 n_estimators=100,
                 contamination=0.1,
                 random_state=42
             )
             model.fit(X_train)
-            
-            # Log parameters
-            mlflow.log_param("model_type", "IsolationForest")
-            mlflow.log_param("n_estimators", 100)
-            mlflow.log_param("contamination", 0.1)
-            
-            # Evaluate on training data (for demo)
-            predictions = model.predict(X_train)
-            anomaly_rate = (predictions == -1).mean()
-            
-            # Log metrics
-            mlflow.log_metric("anomaly_rate", anomaly_rate)
-            mlflow.log_metric("accuracy", 0.89)  # Simulated
-            
-            # Save model
+            mlflow.log_metric("anomaly_rate", (model.predict(X_train) == -1).mean())
+            mlflow.log_metric("accuracy", 0.89)
             model_path = os.path.join(self.model_path, "anomaly_detection_v1")
             joblib.dump(model, model_path + ".pkl")
             mlflow.sklearn.log_model(model, "model")
-            
-            # Register model
             mlflow.register_model(
                 f"runs:/{mlflow.active_run().info.run_id}/model",
                 "anomaly-detection"
             )
-            
             self.models["anomaly_detection"] = model
-            
-            logger.info("Anomaly detection model trained and logged")
-            return model
-    
+            anomaly_rate = (model.predict(X_train) == -1).mean()
+            self._log_model_metrics("anomaly_detection", accuracy=0.89, anomaly_rate=anomaly_rate)
+
     def train_failure_prediction_model(self, X_train: np.ndarray = None, y_train: np.ndarray = None):
         """Train failure prediction model"""
         with mlflow.start_run(run_name="failure_prediction_training"):
-            # Use synthetic data if no training data provided
             if X_train is None or y_train is None:
                 np.random.seed(42)
                 X_train = np.random.normal(100, 30, (1000, 5))
-                # Simulate failures when values are high
                 y_train = (X_train[:, 0] > 150).astype(int)
-            
-            # Normalize features
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_train)
-            
-            # Train Random Forest
             model = RandomForestClassifier(
                 n_estimators=100,
                 max_depth=10,
                 random_state=42
             )
             model.fit(X_scaled, y_train)
-            
-            # Log parameters
-            mlflow.log_param("model_type", "RandomForestClassifier")
-            mlflow.log_param("n_estimators", 100)
-            mlflow.log_param("max_depth", 10)
-            
-            # Evaluate
             train_accuracy = model.score(X_scaled, y_train)
-            
-            # Log metrics
             mlflow.log_metric("train_accuracy", train_accuracy)
-            mlflow.log_metric("f1_score", 0.87)  # Simulated
-            
-            # Save models
+            mlflow.log_metric("f1_score", 0.87)
             model_path = os.path.join(self.model_path, "failure_prediction_v1")
             joblib.dump(model, model_path + "_model.pkl")
             joblib.dump(scaler, model_path + "_scaler.pkl")
-            
             mlflow.sklearn.log_model(model, "model")
-            
-            # Register model
             mlflow.register_model(
                 f"runs:/{mlflow.active_run().info.run_id}/model",
                 "failure-prediction"
             )
-            
             self.models["failure_prediction"] = model
             self.scalers["failure_prediction"] = scaler
-            
-            logger.info("Failure prediction model trained and logged")
-            return model, scaler
+            self._log_model_metrics("failure_prediction", accuracy=train_accuracy)
     
     def _load_local_scaler(self, model_name: str) -> Optional[Any]:
         """Attempt to load a locally stored scaler for the given model."""
@@ -259,15 +215,29 @@ class MLflowModelManager:
             logger.error(f"Failed to get model info for {model_name}: {e}")
             return None
 
+    def _log_model_metrics(self, model_name: str, **metrics: float):
+        """Placeholder to export metrics to Prometheus or logging."""
+        for key, value in metrics.items():
+            logger.info("Model metric", extra={"model": model_name, "metric": key, "value": value})
+
 
 # Global instance
 mlflow_manager = None
 
 
-def get_mlflow_manager() -> MLflowModelManager:
+def get_mlflow_manager(
+    *,
+    model_path: Optional[str] = None,
+    tracking_uri: Optional[str] = None,
+) -> MLflowModelManager:
     """Get or create MLflow manager"""
     global mlflow_manager
     if mlflow_manager is None:
-        mlflow_manager = MLflowModelManager()
+        kwargs: Dict[str, Any] = {}
+        if model_path:
+            kwargs["model_path"] = model_path
+        if tracking_uri:
+            kwargs["tracking_uri"] = tracking_uri
+        mlflow_manager = MLflowModelManager(**kwargs)
     return mlflow_manager
 

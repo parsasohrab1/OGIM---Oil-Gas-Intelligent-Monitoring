@@ -4,7 +4,7 @@ Initialize database schema and create initial data
 """
 import sys
 from sqlalchemy import text
-from database import engine, timescale_engine, init_db, init_timescale_db, SessionLocal
+from database import engine, timescale_engine, SessionLocal, Base
 from models import User, Tag, AlertRule
 from security import get_password_hash
 from datetime import datetime
@@ -119,11 +119,15 @@ def main():
     print("=" * 60)
     print()
     
+    if os.getenv("ENVIRONMENT", "development") != "development":
+        print("Refusing to run init_db outside development environment.", file=sys.stderr)
+        sys.exit(1)
+    
     try:
-        # Create all tables
-        print("Creating tables...")
-        init_db()
-        init_timescale_db()
+        # Create all tables (development only)
+        print("Creating tables (development use only)...")
+        Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=timescale_engine)
         print("✓ Tables created")
         print()
         

@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "ogim-services"
+    static_configs:
+      - targets:
+          - "auth-service:8001"
+          - "data-ingestion-service:8002"
+          - "ml-inference-service:8003"
+          - "alert-service:8004"
+          - "reporting-service:8005"
+          - "command-control-service:8006"
+          - "tag-catalog-service:8007"
+          - "digital-twin-service:8008"
+          - "api-gateway:8000"
+

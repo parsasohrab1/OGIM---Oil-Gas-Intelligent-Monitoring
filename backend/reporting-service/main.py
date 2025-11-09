@@ -5,10 +5,34 @@ Generates periodic and on-demand analytical reports
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime
+import time
 import uvicorn
+import sys
+import os
 
+from prometheus_client import Counter, Histogram
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
+
+from logging_config import setup_logging  # type: ignore
+from metrics import setup_metrics  # type: ignore
+from tracing import setup_tracing  # type: ignore
+
+logger = setup_logging("reporting-service")
 app = FastAPI(title="OGIM Reporting Service", version="1.0.0")
+setup_metrics(app, "reporting-service")
+setup_tracing(app, "reporting-service")
+
+REPORTS_GENERATED = Counter(
+    "reports_generated_total",
+    "Number of reports generated",
+    ["report_type"],
+)
+REPORT_GENERATION_DURATION = Histogram(
+    "report_generation_duration_seconds",
+    "Time spent generating reports",
+)
 
 
 class ReportRequest(BaseModel):
@@ -35,9 +59,9 @@ reports_db = []
 @app.post("/reports/generate")
 async def generate_report(request: ReportRequest):
     """Generate a new report"""
+    start = time.perf_counter()
     report_id = f"RPT-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    
-    # Mock report generation
+
     report = {
         "report_id": report_id,
         "report_type": request.report_type,
@@ -51,10 +75,17 @@ async def generate_report(request: ReportRequest):
             "average_temperature": 85.3,
             "alerts_count": 12,
             "downtime_hours": 2.5,
-        }
+        },
     }
-    
+
     reports_db.append(report)
+    duration = time.perf_counter() - start
+    REPORTS_GENERATED.labels(report_type=request.report_type).inc()
+    REPORT_GENERATION_DURATION.observe(duration)
+    logger.info(
+        "Report generated",
+        extra={"report_id": report_id, "report_type": request.report_type, "duration": duration},
+    )
     return report
 
 

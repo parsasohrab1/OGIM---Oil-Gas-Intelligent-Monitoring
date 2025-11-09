@@ -14,6 +14,8 @@
   - تکنولوژی‌های استفاده شده
   - شروع سریع
   - مثال‌های کد
+- **[REPO_STRUCTURE](REPO_STRUCTURE.md)** - ساختار پوشه‌ها و بخش‌های اصلی پروژه
+- **[DEVELOPER_GUIDE](DEVELOPER_GUIDE.md)** - راهنمای توسعه‌دهنده و گردش کار
 
 ### ⚙️ نصب و راه‌اندازی
 
@@ -23,6 +25,7 @@
   - نصب دستی (Development)
   - تنظیمات اولیه
   - عیب‌یابی
+- **[CONFIGURATION](CONFIGURATION.md)** - پروفایل‌های dev/prod و مدیریت Secret ها
 
 ### 🏗️ معماری
 
@@ -119,8 +122,12 @@
 
 1. **Docker Setup:** `docker-compose.dev.yml`
 2. **Kubernetes Deployment:** `infrastructure/kubernetes/`
-3. **CI/CD:** `.github/workflows/ci-cd.yml`
-4. **Monitoring:** Grafana + Prometheus (planned)
+3. **CI/CD:** `.github/workflows/backend-ci.yml`, [`CI_CD.md`](CI_CD.md)
+4. **Monitoring & Metrics:** [`OBSERVABILITY.md`](OBSERVABILITY.md), rules: `infrastructure/prometheus/rules/`
+5. **Logging:** [`LOGGING.md`](LOGGING.md)
+6. **Tracing:** [`TRACING.md`](TRACING.md)
+7. **Security Checklist:** [`SECURITY_CHECKLIST.md`](SECURITY_CHECKLIST.md)
+8. **ML Operations:** [`ML_OPERATIONS.md`](ML_OPERATIONS.md)
 
 ### برای Data Engineers
 
@@ -133,7 +140,7 @@
 
 1. **Project Overview:** [README.md](README.md)
 2. **System Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md)
-3. **Feature List:** [README.md#features](README.md)
+3. **Rollout & Handoff:** [`HANDOFF.md`](HANDOFF.md)
 
 ---
 
@@ -229,7 +236,8 @@ OGIM---Oil-Gas-Intelligent-Monitoring/
 
 1. **Docker:** `docker-compose -f docker-compose.dev.yml up`
 2. **Kubernetes:** `kubectl apply -f infrastructure/kubernetes/`
-3. **Production:** مراجعه به [README.md#deployment](README.md)
+3. **Configuration & Secrets:** [`CONFIGURATION.md`](CONFIGURATION.md)
+4. **Production Handoff:** [`HANDOFF.md`](HANDOFF.md)
 
 ---
 
