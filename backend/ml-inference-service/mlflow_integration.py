@@ -1,17 +1,24 @@
 """
 MLflow integration for model management
 """
+import glob
+import logging
+import os
+from typing import Any, Dict, Optional
+
+import joblib
 import mlflow
 import mlflow.sklearn
 import numpy as np
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-import joblib
-import os
-from typing import Dict, Any
-import logging
 
 logger = logging.getLogger(__name__)
+
+MODEL_REGISTRY_TO_KEY = {
+    "anomaly-detection": "anomaly_detection",
+    "failure-prediction": "failure_prediction",
+}
 
 
 class MLflowModelManager:
@@ -26,8 +33,8 @@ class MLflowModelManager:
         os.makedirs(model_path, exist_ok=True)
         
         # Initialize models
-        self.models = {}
-        self.scalers = {}
+        self.models: Dict[str, Any] = {}
+        self.scalers: Dict[str, Any] = {}
         
         logger.info(f"MLflow tracking URI: {self.tracking_uri}")
     
@@ -130,6 +137,23 @@ class MLflowModelManager:
             logger.info("Failure prediction model trained and logged")
             return model, scaler
     
+    def _load_local_scaler(self, model_name: str) -> Optional[Any]:
+        """Attempt to load a locally stored scaler for the given model."""
+        pattern = os.path.join(self.model_path, f"{model_name}_*_scaler.pkl")
+        matches = glob.glob(pattern)
+        if not matches:
+            return None
+        
+        scaler_path = max(matches, key=os.path.getmtime)
+        try:
+            scaler = joblib.load(scaler_path)
+            self.scalers[model_name] = scaler
+            logger.info("Loaded scaler for %s from %s", model_name, scaler_path)
+            return scaler
+        except Exception as exc:
+            logger.error("Failed to load scaler for %s: %s", model_name, exc)
+            return None
+    
     def load_model(self, model_name: str, version: int = None):
         """Load model from MLflow registry"""
         try:
@@ -139,7 +163,11 @@ class MLflowModelManager:
                 model_uri = f"models:/{model_name}/latest"
             
             model = mlflow.sklearn.load_model(model_uri)
-            self.models[model_name] = model
+            key = MODEL_REGISTRY_TO_KEY.get(model_name, model_name)
+            self.models[key] = model
+            
+            if key == "failure_prediction":
+                self._load_local_scaler("failure_prediction")
             
             logger.info(f"Loaded model: {model_name} (version: {version or 'latest'})")
             return model
@@ -147,13 +175,18 @@ class MLflowModelManager:
             logger.error(f"Failed to load model {model_name}: {e}")
             return None
     
+    def load_registered_models(self):
+        """Best-effort load of supported models from the registry."""
+        results = {}
+        for registry_name in ("anomaly-detection", "failure-prediction"):
+            results[registry_name] = self.load_model(registry_name) is not None
+        return results
+    
     def predict_anomaly(self, features: Dict[str, float]) -> Dict[str, Any]:
         """Predict anomaly"""
-        if "anomaly_detection" not in self.models:
-            logger.warning("Anomaly detection model not loaded, training new one...")
-            self.train_anomaly_detection_model()
-        
-        model = self.models["anomaly_detection"]
+        model = self.models.get("anomaly_detection") or self.load_model("anomaly-detection")
+        if model is None:
+            raise RuntimeError("Anomaly detection model not available. Load or train the model before inference.")
         
         # Prepare features
         X = np.array([list(features.values())])
@@ -173,12 +206,11 @@ class MLflowModelManager:
     
     def predict_failure(self, features: Dict[str, float]) -> Dict[str, Any]:
         """Predict failure"""
-        if "failure_prediction" not in self.models:
-            logger.warning("Failure prediction model not loaded, training new one...")
-            self.train_failure_prediction_model()
+        model = self.models.get("failure_prediction") or self.load_model("failure-prediction")
+        if model is None:
+            raise RuntimeError("Failure prediction model not available. Load or train the model before inference.")
         
-        model = self.models["failure_prediction"]
-        scaler = self.scalers.get("failure_prediction")
+        scaler = self.scalers.get("failure_prediction") or self._load_local_scaler("failure_prediction")
         
         # Prepare features
         X = np.array([list(features.values())])

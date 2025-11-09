@@ -2,21 +2,46 @@
 ML Inference Service
 Provides low-latency model inference for anomaly detection and failure prediction
 """
-from fastapi import FastAPI, HTTPException
+import os
+import sys
+import time
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict
-from datetime import datetime
-import uvicorn
-import numpy as np
-import sys
-import os
 
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
 from config import settings
 from logging_config import setup_logging
+from shared.auth import require_roles
+from metrics import setup_metrics
+
+try:
+    from prometheus_client import Counter, Histogram
+
+    METRICS_ENABLED = True
+    INFERENCE_REQUESTS = Counter(
+        "ml_inference_requests_total",
+        "Total inference requests",
+        ["model_type"],
+    )
+    INFERENCE_ERRORS = Counter(
+        "ml_inference_errors_total",
+        "Total inference errors",
+        ["model_type", "reason"],
+    )
+    INFERENCE_LATENCY = Histogram(
+        "ml_inference_latency_seconds",
+        "Inference latency in seconds",
+        ["model_type"],
+    )
+except ImportError:  # pragma: no cover - dependency optional at runtime
+    METRICS_ENABLED = False
+    INFERENCE_REQUESTS = INFERENCE_ERRORS = INFERENCE_LATENCY = None  # type: ignore
 
 # Setup logging
 logger = setup_logging("ml-inference-service")
@@ -24,12 +49,14 @@ logger = setup_logging("ml-inference-service")
 # Import MLflow integration
 try:
     from mlflow_integration import get_mlflow_manager
+
     MLFLOW_AVAILABLE = True
 except ImportError:
     logger.warning("MLflow not available, using mock models")
     MLFLOW_AVAILABLE = False
 
 app = FastAPI(title="OGIM ML Inference Service", version="1.0.0")
+setup_metrics(app, "ml-inference-service")
 
 # CORS Configuration
 app.add_middleware(
@@ -40,8 +67,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Ensure model storage path is aligned with shared settings
+os.environ.setdefault("MODEL_STORAGE_PATH", settings.MODEL_STORAGE_PATH)
+
 # MLflow manager
 mlflow_manager = None
+MODEL_TYPE_TO_REGISTRY = {
+    "anomaly_detection": "anomaly-detection",
+    "failure_prediction": "failure-prediction",
+}
 
 
 class InferenceRequest(BaseModel):
@@ -68,13 +102,12 @@ async def startup_event():
     
     if MLFLOW_AVAILABLE:
         try:
-            mlflow_manager = get_mlflow_manager()
-            
-            # Train initial models if not exists
-            logger.info("Training initial ML models...")
-            mlflow_manager.train_anomaly_detection_model()
-            mlflow_manager.train_failure_prediction_model()
-            logger.info("ML models ready")
+            mlflow_manager = get_mlflow_manager(
+                model_path=settings.MODEL_STORAGE_PATH,
+                tracking_uri=settings.MLFLOW_TRACKING_URI,
+            )
+            load_results = mlflow_manager.load_registered_models()
+            logger.info("Model load results: %s", load_results)
         except Exception as e:
             logger.error(f"Failed to initialize MLflow: {e}")
             logger.warning("Falling back to mock models")
@@ -121,6 +154,11 @@ def mock_failure_prediction(features: Dict[str, float]) -> Dict[str, float]:
 @app.post("/infer", response_model=InferenceResponse)
 async def infer(request: InferenceRequest):
     """Perform model inference"""
+    start_time = None
+    if METRICS_ENABLED:
+        INFERENCE_REQUESTS.labels(request.model_type).inc()
+        start_time = time.perf_counter()
+
     try:
         # Use MLflow models if available, otherwise fallback to mock
         if MLFLOW_AVAILABLE and mlflow_manager:
@@ -150,9 +188,20 @@ async def infer(request: InferenceRequest):
             failure_probability=result.get("failure_probability"),
             timestamp=datetime.utcnow()
         )
+    except RuntimeError as exc:
+        logger.warning("Inference unavailable for %s: %s", request.model_type, exc)
+        if METRICS_ENABLED:
+            INFERENCE_ERRORS.labels(request.model_type, "unavailable").inc()
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as e:
         logger.error(f"Inference error: {e}")
+        if METRICS_ENABLED:
+            INFERENCE_ERRORS.labels(request.model_type, type(e).__name__).inc()
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
+    finally:
+        if METRICS_ENABLED and start_time is not None:
+            duration = time.perf_counter() - start_time
+            INFERENCE_LATENCY.labels(request.model_type).observe(duration)
 
 
 @app.post("/batch_infer")
@@ -171,24 +220,79 @@ async def batch_infer(requests: List[InferenceRequest]):
 @app.get("/models")
 async def list_models():
     """List available models"""
-    return {
-        "models": [
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        return {
+            "models": [
+                {
+                    "type": "anomaly_detection",
+                    "registry": None,
+                    "loaded": False,
+                    "status": "mock",
+                },
+                {
+                    "type": "failure_prediction",
+                    "registry": None,
+                    "loaded": False,
+                    "status": "mock",
+                },
+            ]
+        }
+
+    models = []
+    for model_type, registry_name in MODEL_TYPE_TO_REGISTRY.items():
+        info = mlflow_manager.get_model_info(registry_name)
+        models.append(
             {
-                "model_id": "anomaly-detection-v1",
-                "type": "anomaly_detection",
-                "version": "1.0.0",
-                "status": "active",
-                "accuracy": 0.89
-            },
-            {
-                "model_id": "failure-prediction-v1",
-                "type": "failure_prediction",
-                "version": "1.0.0",
-                "status": "active",
-                "accuracy": 0.87
+                "type": model_type,
+                "registry": registry_name,
+                "loaded": model_type in mlflow_manager.models,
+                "status": "ready" if info else "missing",
+                "info": info,
             }
-        ]
-    }
+        )
+
+    return {"models": models}
+
+
+@app.post("/models/{model_type}/train")
+async def train_model(
+    model_type: str,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin"})),
+):
+    """Trigger model training on demand."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+
+    if model_type == "anomaly_detection":
+        mlflow_manager.train_anomaly_detection_model()
+        mlflow_manager.load_model(MODEL_TYPE_TO_REGISTRY[model_type])
+    elif model_type == "failure_prediction":
+        mlflow_manager.train_failure_prediction_model()
+        mlflow_manager.load_model(MODEL_TYPE_TO_REGISTRY[model_type])
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
+
+    return {"message": f"{model_type} model training started"}
+
+
+@app.post("/models/reload")
+async def reload_models(
+    _: Dict[str, Any] = Depends(require_roles({"system_admin"})),
+):
+    """Reload registered models from MLflow."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+
+    results = mlflow_manager.load_registered_models()
+    return {"loaded": results}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    if not METRICS_ENABLED:
+        raise HTTPException(status_code=503, detail="Prometheus client not available")
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")

@@ -5,3 +5,4 @@ psycopg2-binary==2.9.9
 pydantic==2.5.2
 pydantic-settings==2.1.0
 confluent-kafka==2.3.0
+prometheus-client==0.17.1
