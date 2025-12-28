@@ -2,7 +2,7 @@
 Alert Service
 Manages alert rules, de-duplication, escalation, and silencing
 """
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -23,6 +23,9 @@ from auth import require_authentication, require_roles
 from tracing import setup_tracing
 from metrics import setup_metrics
 from sqlalchemy.orm import Session
+import httpx
+import httpx
+import asyncio
 
 # Setup logging
 logger = setup_logging("alert-service")
@@ -161,6 +164,25 @@ async def create_alert(
             alert_producer.send(alert.alert_id, alert.dict())
     except Exception as e:
         logger.error(f"Failed to publish alert to Kafka: {e}")
+    
+    # Auto-create work order for critical alerts if enabled (background task)
+    if alert.severity == "critical" and settings.ERP_AUTO_CREATE_WORK_ORDERS:
+        import asyncio
+        async def create_work_order():
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{settings.ERP_SERVICE_URL}/work-orders/auto-create",
+                        params={"alert_id": alert.alert_id, "erp_type": settings.ERP_DEFAULT_SYSTEM},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        logger.info(f"Auto-created work order for alert {alert.alert_id}")
+            except Exception as e:
+                logger.error(f"Failed to auto-create work order: {e}")
+        
+        # Run in background
+        asyncio.create_task(create_work_order())
     
     logger.info(f"Alert created: {alert.alert_id}")
     return {"alert_id": alert.alert_id, "message": "Alert created"}

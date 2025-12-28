@@ -18,8 +18,13 @@ from database import get_db
 from models import Command, User, AuditLog
 from config import settings
 from logging_config import setup_logging
-from kafka_utils import KafkaProducerWrapper, KAFKA_TOPICS
+from kafka_utils import (
+    KafkaProducerWrapper, 
+    KAFKA_TOPICS,
+    create_low_latency_producer
+)
 from auth import require_authentication, require_roles
+from secure_command_workflow import secure_command_workflow
 from metrics import setup_metrics
 from tracing import setup_tracing
 from sqlalchemy.orm import Session
@@ -41,8 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Kafka producer
+# Kafka producers - separate for critical and standard commands
 command_producer = None
+critical_command_producer = None
 
 
 class CommandRequest(BaseModel):
@@ -52,6 +58,7 @@ class CommandRequest(BaseModel):
     parameters: Dict
     requested_by: str
     requires_two_factor: bool = True
+    critical: bool = False  # True for critical controls requiring millisecond latency
 
 
 class CommandResponse(BaseModel):
@@ -79,10 +86,15 @@ require_command_admin = require_roles({"system_admin"})
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and Kafka on startup"""
-    global command_producer
+    global command_producer, critical_command_producer
     logger.info("Starting command control service...")
     try:
+        # Standard producer for regular commands
         command_producer = KafkaProducerWrapper(KAFKA_TOPICS["CONTROL_COMMANDS"])
+        # Low-latency producer for critical commands
+        critical_command_producer = create_low_latency_producer(
+            KAFKA_TOPICS["CRITICAL_CONTROL_COMMANDS"]
+        )
         logger.info("Command control service ready. Ensure database migrations are applied.")
     except Exception as e:
         logger.error(f"Failed to initialize command control service: {e}")
@@ -93,6 +105,8 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     if command_producer:
         command_producer.close()
+    if critical_command_producer:
+        critical_command_producer.close()
 
 
 @app.post("/commands")
@@ -222,16 +236,29 @@ async def execute_command(
     
     # Publish to Kafka for SCADA connector to execute
     try:
-        if command_producer:
-            command_data = {
-                "command_id": command.command_id,
-                "well_name": command.well_name,
-                "equipment_id": command.equipment_id,
-                "command_type": command.command_type,
-                "parameters": command.parameters
-            }
+        command_data = {
+            "command_id": command.command_id,
+            "well_name": command.well_name,
+            "equipment_id": command.equipment_id,
+            "command_type": command.command_type,
+            "parameters": command.parameters
+        }
+        
+        # Use low-latency producer for critical commands
+        # Check if command is marked as critical (from request or stored in DB)
+        is_critical = getattr(command, 'critical', False)
+        
+        if is_critical and critical_command_producer:
+            # Low-latency path: no flush, immediate send
+            critical_command_producer.send(command_id, command_data, flush_immediately=False)
+            logger.info(f"Critical command sent via low-latency channel: {command_id}")
+        elif command_producer:
+            # Standard path: flush for reliability
             command_producer.send(command_id, command_data)
             command_producer.flush()
+        else:
+            raise RuntimeError("No Kafka producer available")
+            
     except Exception as e:
         logger.error(f"Failed to publish command to Kafka: {e}")
         command.status = "failed"

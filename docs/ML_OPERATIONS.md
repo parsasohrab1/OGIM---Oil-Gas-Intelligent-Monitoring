@@ -1,5 +1,44 @@
 # ML Operations & Retraining Plan
 
+## Available Models
+
+### 1. Anomaly Detection (Isolation Forest)
+- تشخیص ناهنجاری در داده‌های سنسور
+- استفاده از Isolation Forest
+- خروجی: anomaly score و probability
+
+### 2. Failure Prediction (Random Forest)
+- پیش‌بینی احتمال خرابی تجهیزات
+- استفاده از Random Forest Classifier
+- خروجی: failure probability
+
+### 3. Time Series Forecasting (LSTM) ✅
+- پیش‌بینی سری‌های زمانی با استفاده از شبکه‌های عصبی بازگشتی LSTM
+- مناسب برای پیش‌بینی مقادیر آینده سنسورها
+- معماری: دو لایه LSTM با Dropout
+- پارامترهای قابل تنظیم:
+  - `seq_length`: طول دنباله ورودی (پیش‌فرض: 60)
+  - `forecast_horizon`: تعداد گام‌های پیش‌بینی (پیش‌فرض: 1)
+  - `epochs`: تعداد دوره‌های آموزش (پیش‌فرض: 50)
+  - `batch_size`: اندازه batch (پیش‌فرض: 32)
+
+**استفاده:**
+```bash
+# آموزش مدل
+python scripts/train_models.py --model time_series_forecast
+
+# یا از طریق API
+POST /models/time_series_forecast/train
+
+# پیش‌بینی
+POST /forecast
+{
+  "sensor_id": "TAG-001",
+  "historical_data": [1.2, 1.5, 1.3, ...],  # حداقل 60 نقطه
+  "forecast_steps": 5  # پیش‌بینی 5 گام آینده
+}
+```
+
 ## Scheduled Retraining
 - اجرای job دوره‌ای (مثل CronJob یا GitHub Actions) برای اجرای `scripts/train_models.py`.
   - نمونه GitHub Actions: `.github/workflows/ml-retrain.yml`

@@ -1,11 +1,18 @@
 """
 Shared database configuration and utilities
 """
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, pool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 import os
+import random
+import logging
+from typing import Optional
+
+from .config import settings
+
+logger = logging.getLogger(__name__)
 
 # Database URLs from environment variables
 DATABASE_URL = os.getenv(
@@ -27,12 +34,50 @@ engine = create_engine(
     echo=False
 )
 
+
+def get_timescale_connection_url() -> str:
+    """
+    Get TimescaleDB connection URL with load balancing for multi-node setup
+    
+    Returns:
+        Connection URL (load balanced if multi-node enabled)
+    """
+    if settings.TIMESCALE_MULTI_NODE_ENABLED and settings.TIMESCALE_ACCESS_NODES:
+        # Load balance across access nodes
+        access_nodes = [node.strip() for node in settings.TIMESCALE_ACCESS_NODES.split(",")]
+        if access_nodes:
+            # Random selection for load balancing
+            selected_node = random.choice(access_nodes)
+            # Parse original URL and replace host:port
+            base_url = TIMESCALE_URL
+            if "@" in base_url:
+                parts = base_url.split("@")
+                if len(parts) == 2:
+                    auth_part = parts[0]
+                    rest = parts[1]
+                    # Replace host:port in rest part
+                    if ":" in rest:
+                        db_part = rest.split("/")[-1] if "/" in rest else rest
+                        new_url = f"{auth_part}@{selected_node}/{db_part}"
+                        logger.debug(f"Using TimescaleDB access node: {selected_node}")
+                        return new_url
+    
+    return TIMESCALE_URL
+
+
+# Create TimescaleDB engine with optimized pool settings
 timescale_engine = create_engine(
-    TIMESCALE_URL,
-    pool_size=10,
-    max_overflow=20,
+    get_timescale_connection_url(),
+    pool_size=settings.TIMESCALE_CONNECTION_POOL_SIZE,
+    max_overflow=settings.TIMESCALE_MAX_OVERFLOW,
     pool_pre_ping=True,
-    echo=False
+    pool_recycle=3600,  # Recycle connections after 1 hour
+    echo=False,
+    # Optimize for high-volume writes
+    connect_args={
+        "connect_timeout": 10,
+        "application_name": "ogim_timescale_client"
+    }
 )
 
 # Create session factories

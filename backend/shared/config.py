@@ -58,6 +58,36 @@ class Settings(BaseSettings):
         env="TIMESCALE_URL"
     )
     
+    # TimescaleDB Multi-node Settings
+    TIMESCALE_MULTI_NODE_ENABLED: bool = Field(
+        default=False,
+        env="TIMESCALE_MULTI_NODE_ENABLED"
+    )
+    TIMESCALE_ACCESS_NODES: Optional[str] = Field(
+        default=None,
+        env="TIMESCALE_ACCESS_NODES"  # Comma-separated: node1:5432,node2:5432
+    )
+    TIMESCALE_DATA_NODES: Optional[str] = Field(
+        default=None,
+        env="TIMESCALE_DATA_NODES"  # Comma-separated: node1:5432,node2:5432,node3:5432
+    )
+    TIMESCALE_CONNECTION_POOL_SIZE: int = Field(
+        default=20,
+        env="TIMESCALE_CONNECTION_POOL_SIZE"
+    )
+    TIMESCALE_MAX_OVERFLOW: int = Field(
+        default=40,
+        env="TIMESCALE_MAX_OVERFLOW"
+    )
+    TIMESCALE_CHUNK_TIME_INTERVAL: str = Field(
+        default="1 day",  # Chunk interval for hypertables
+        env="TIMESCALE_CHUNK_TIME_INTERVAL"
+    )
+    TIMESCALE_NUMBER_PARTITIONS: int = Field(
+        default=4,  # Number of partitions for distributed hypertables
+        env="TIMESCALE_NUMBER_PARTITIONS"
+    )
+    
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS: str = Field(
         default="kafka:9092",
@@ -66,6 +96,36 @@ class Settings(BaseSettings):
     KAFKA_SCHEMA_REGISTRY_URL: str = Field(
         default="http://schema-registry:8081",
         env="KAFKA_SCHEMA_REGISTRY_URL"
+    )
+    
+    # Kafka Low-Latency Settings (for critical controls)
+    KAFKA_LOW_LATENCY_MODE: bool = Field(
+        default=False,
+        env="KAFKA_LOW_LATENCY_MODE"
+    )
+    KAFKA_PRODUCER_ACKS: str = Field(
+        default="all",  # "0", "1", or "all" - use "1" or "0" for low-latency
+        env="KAFKA_PRODUCER_ACKS"
+    )
+    KAFKA_PRODUCER_LINGER_MS: int = Field(
+        default=0,  # 0 for immediate send, higher for batching
+        env="KAFKA_PRODUCER_LINGER_MS"
+    )
+    KAFKA_PRODUCER_BATCH_SIZE: int = Field(
+        default=16384,  # bytes - use 1 for critical controls
+        env="KAFKA_PRODUCER_BATCH_SIZE"
+    )
+    KAFKA_PRODUCER_COMPRESSION_TYPE: str = Field(
+        default="none",  # "none", "gzip", "snappy", "lz4" - "none" for lowest latency
+        env="KAFKA_PRODUCER_COMPRESSION_TYPE"
+    )
+    KAFKA_CONSUMER_FETCH_MIN_BYTES: int = Field(
+        default=1,  # Minimum bytes to fetch - 1 for lowest latency
+        env="KAFKA_CONSUMER_FETCH_MIN_BYTES"
+    )
+    KAFKA_CONSUMER_FETCH_MAX_WAIT_MS: int = Field(
+        default=0,  # Max wait time - 0 for immediate fetch
+        env="KAFKA_CONSUMER_FETCH_MAX_WAIT_MS"
     )
     
     # Redis (for caching and session)
@@ -111,6 +171,48 @@ class Settings(BaseSettings):
     # ML Models
     MODEL_STORAGE_PATH: str = Field(default="/app/models", env="MODEL_STORAGE_PATH")
     MLFLOW_TRACKING_URI: Optional[str] = Field(default=None, env="MLFLOW_TRACKING_URI")
+    
+    # Offline Buffer Settings
+    OFFLINE_BUFFER_ENABLED: bool = Field(default=True, env="OFFLINE_BUFFER_ENABLED")
+    OFFLINE_BUFFER_PATH: str = Field(default="./data/buffer", env="OFFLINE_BUFFER_PATH")
+    OFFLINE_BUFFER_MAX_SIZE: int = Field(default=100000, env="OFFLINE_BUFFER_MAX_SIZE")  # Max records
+    OFFLINE_BUFFER_MAX_SIZE_MB: int = Field(default=500, env="OFFLINE_BUFFER_MAX_SIZE_MB")  # Max size in MB
+    OFFLINE_BUFFER_CLEANUP_INTERVAL: int = Field(default=3600, env="OFFLINE_BUFFER_CLEANUP_INTERVAL")  # seconds
+    
+    # Connection Monitor Settings
+    CONNECTION_MONITOR_ENABLED: bool = Field(default=True, env="CONNECTION_MONITOR_ENABLED")
+    CONNECTION_CHECK_INTERVAL: int = Field(default=5, env="CONNECTION_CHECK_INTERVAL")  # seconds
+    CONNECTION_CHECK_TIMEOUT: int = Field(default=3, env="CONNECTION_CHECK_TIMEOUT")  # seconds
+    CONNECTION_CHECK_HOSTS: Optional[str] = Field(default=None, env="CONNECTION_CHECK_HOSTS")  # comma-separated host:port
+    CONNECTION_CHECK_URLS: Optional[str] = Field(default=None, env="CONNECTION_CHECK_URLS")  # comma-separated URLs
+    
+    # Retry Settings
+    RETRY_MAX_ATTEMPTS: int = Field(default=10, env="RETRY_MAX_ATTEMPTS")
+    RETRY_BACKOFF_FACTOR: float = Field(default=2.0, env="RETRY_BACKOFF_FACTOR")
+    RETRY_INITIAL_DELAY: int = Field(default=1, env="RETRY_INITIAL_DELAY")  # seconds
+    
+    # Edge Computing Settings
+    EDGE_COMPUTING_ENABLED: bool = Field(default=False, env="EDGE_COMPUTING_ENABLED")
+    EDGE_SERVICE_URL: str = Field(default="http://edge-computing-service:8009", env="EDGE_SERVICE_URL")
+    
+    # Industrial Security Settings
+    INDUSTRIAL_SECURITY_ENABLED: bool = Field(default=True, env="INDUSTRIAL_SECURITY_ENABLED")
+    MODBUS_SECURITY_ENABLED: bool = Field(default=True, env="MODBUS_SECURITY_ENABLED")
+    LAYER1_SECURITY_ENABLED: bool = Field(default=True, env="LAYER1_SECURITY_ENABLED")
+    LAYER2_SECURITY_ENABLED: bool = Field(default=True, env="LAYER2_SECURITY_ENABLED")
+    
+    # Connectivity Settings (5G/Satellite)
+    CONNECTIVITY_MANAGER_ENABLED: bool = Field(default=False, env="CONNECTIVITY_MANAGER_ENABLED")
+    CONNECTION_PRIORITY: Optional[str] = Field(
+        default=None,
+        env="CONNECTION_PRIORITY"  # Comma-separated: ethernet,5g,4g,satellite
+    )
+    
+    # ERP Integration Settings
+    ERP_INTEGRATION_ENABLED: bool = Field(default=False, env="ERP_INTEGRATION_ENABLED")
+    ERP_SERVICE_URL: str = Field(default="http://erp-integration-service:8010", env="ERP_SERVICE_URL")
+    ERP_DEFAULT_SYSTEM: str = Field(default="sap", env="ERP_DEFAULT_SYSTEM")  # sap, oracle, maximo
+    ERP_AUTO_CREATE_WORK_ORDERS: bool = Field(default=False, env="ERP_AUTO_CREATE_WORK_ORDERS")
     
     class Config:
         env_file = candidate_env_file

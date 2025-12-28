@@ -20,6 +20,7 @@ from logging_config import setup_logging
 from shared.auth import require_roles
 from metrics import setup_metrics
 from tracing import setup_tracing
+from rul_model import rul_model_manager
 
 try:
     from prometheus_client import Counter, Histogram
@@ -77,6 +78,7 @@ mlflow_manager = None
 MODEL_TYPE_TO_REGISTRY = {
     "anomaly_detection": "anomaly-detection",
     "failure_prediction": "failure-prediction",
+    "time_series_forecast": "time-series-forecast",
 }
 
 
@@ -93,6 +95,21 @@ class InferenceResponse(BaseModel):
     probability: float
     anomaly_score: Optional[float] = None
     failure_probability: Optional[float] = None
+    timestamp: datetime
+
+
+class TimeSeriesForecastRequest(BaseModel):
+    sensor_id: str
+    historical_data: List[float]
+    forecast_steps: int = 1
+
+
+class TimeSeriesForecastResponse(BaseModel):
+    sensor_id: str
+    predictions: List[float]
+    forecast_steps: int
+    sequence_length: int
+    confidence: float
     timestamp: datetime
 
 
@@ -168,6 +185,11 @@ async def infer(request: InferenceRequest):
                 result = mlflow_manager.predict_anomaly(request.features)
             elif request.model_type == "failure_prediction":
                 result = mlflow_manager.predict_failure(request.features)
+            elif request.model_type == "time_series_forecast":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Use /forecast endpoint for time series predictions"
+                )
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown model type: {request.model_type}")
         else:
@@ -176,6 +198,11 @@ async def infer(request: InferenceRequest):
                 result = mock_anomaly_detection(request.features)
             elif request.model_type == "failure_prediction":
                 result = mock_failure_prediction(request.features)
+            elif request.model_type == "time_series_forecast":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Use /forecast endpoint for time series predictions"
+                )
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown model type: {request.model_type}")
         
@@ -219,6 +246,57 @@ async def batch_infer(requests: List[InferenceRequest]):
     return {"results": results}
 
 
+@app.post("/forecast", response_model=TimeSeriesForecastResponse)
+async def forecast_time_series(request: TimeSeriesForecastRequest):
+    """Perform time series forecasting using LSTM model"""
+    start_time = None
+    if METRICS_ENABLED:
+        INFERENCE_REQUESTS.labels("time_series_forecast").inc()
+        start_time = time.perf_counter()
+
+    try:
+        if not (MLFLOW_AVAILABLE and mlflow_manager):
+            raise HTTPException(
+                status_code=503,
+                detail="MLflow integration not available for time series forecasting"
+            )
+
+        result = mlflow_manager.predict_time_series(
+            historical_data=request.historical_data,
+            forecast_steps=request.forecast_steps
+        )
+
+        logger.info(f"Time series forecast completed for {request.sensor_id}")
+
+        return TimeSeriesForecastResponse(
+            sensor_id=request.sensor_id,
+            predictions=result["predictions"],
+            forecast_steps=result["forecast_steps"],
+            sequence_length=result["sequence_length"],
+            confidence=result["confidence"],
+            timestamp=datetime.utcnow()
+        )
+    except ValueError as e:
+        logger.warning("Invalid input for time series forecast: %s", e)
+        if METRICS_ENABLED:
+            INFERENCE_ERRORS.labels("time_series_forecast", "invalid_input").inc()
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.warning("Time series forecast unavailable: %s", e)
+        if METRICS_ENABLED:
+            INFERENCE_ERRORS.labels("time_series_forecast", "unavailable").inc()
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Time series forecast error: {e}")
+        if METRICS_ENABLED:
+            INFERENCE_ERRORS.labels("time_series_forecast", type(e).__name__).inc()
+        raise HTTPException(status_code=500, detail=f"Forecast error: {str(e)}")
+    finally:
+        if METRICS_ENABLED and start_time is not None:
+            duration = time.perf_counter() - start_time
+            INFERENCE_LATENCY.labels("time_series_forecast").observe(duration)
+
+
 @app.get("/models")
 async def list_models():
     """List available models"""
@@ -233,6 +311,12 @@ async def list_models():
                 },
                 {
                     "type": "failure_prediction",
+                    "registry": None,
+                    "loaded": False,
+                    "status": "mock",
+                },
+                {
+                    "type": "time_series_forecast",
                     "registry": None,
                     "loaded": False,
                     "status": "mock",
@@ -271,6 +355,9 @@ async def train_model(
     elif model_type == "failure_prediction":
         mlflow_manager.train_failure_prediction_model()
         mlflow_manager.load_model(MODEL_TYPE_TO_REGISTRY[model_type])
+    elif model_type == "time_series_forecast":
+        mlflow_manager.train_time_series_model()
+        mlflow_manager.load_model(MODEL_TYPE_TO_REGISTRY[model_type])
     else:
         raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
 
@@ -296,5 +383,6 @@ async def health():
 
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8003)
 

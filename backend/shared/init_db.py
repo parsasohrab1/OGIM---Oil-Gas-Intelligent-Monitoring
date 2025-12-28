@@ -11,18 +11,93 @@ from datetime import datetime
 
 
 def create_hypertables():
-    """Create TimescaleDB hypertables"""
+    """Create TimescaleDB hypertables (single-node or distributed)"""
+    from .config import settings
+    from .timescale_cluster import cluster_manager
+    
     with timescale_engine.connect() as conn:
-        # Create hypertable for sensor_data
-        conn.execute(text("""
-            SELECT create_hypertable(
-                'sensor_data', 
-                'timestamp',
-                if_not_exists => TRUE
-            );
-        """))
-        conn.commit()
-        print("✓ Created hypertable for sensor_data")
+        if settings.TIMESCALE_MULTI_NODE_ENABLED:
+            # Create distributed hypertable
+            print("Creating distributed hypertable for sensor_data...")
+            try:
+                success = cluster_manager.create_distributed_hypertable(
+                    table_name='sensor_data',
+                    time_column='timestamp',
+                    partitioning_column='tag_id',  # Partition by tag_id for better distribution
+                )
+                if success:
+                    print("✓ Created distributed hypertable for sensor_data")
+                else:
+                    raise Exception("Failed to create distributed hypertable")
+            except Exception as e:
+                print(f"⚠ Failed to create distributed hypertable: {e}")
+                print("Trying regular hypertable as fallback...")
+                # Fallback to regular hypertable
+                chunk_interval = settings.TIMESCALE_CHUNK_TIME_INTERVAL
+                conn.execute(text(f"""
+                    SELECT create_hypertable(
+                        'sensor_data', 
+                        'timestamp',
+                        chunk_time_interval => INTERVAL '{chunk_interval}',
+                        if_not_exists => TRUE
+                    );
+                """))
+                conn.commit()
+                print(f"✓ Created regular hypertable for sensor_data (chunk interval: {chunk_interval})")
+        else:
+            # Create regular hypertable for single-node
+            print("Creating hypertable for sensor_data (single-node)...")
+            chunk_interval = settings.TIMESCALE_CHUNK_TIME_INTERVAL
+            conn.execute(text(f"""
+                SELECT create_hypertable(
+                    'sensor_data', 
+                    'timestamp',
+                    chunk_time_interval => INTERVAL '{chunk_interval}',
+                    if_not_exists => TRUE
+                );
+            """))
+            conn.commit()
+            print(f"✓ Created hypertable for sensor_data (chunk interval: {chunk_interval})")
+        
+        # Optimize for high-volume writes (10GB/day)
+        print("\nOptimizing hypertable for high-volume data ingestion...")
+        try:
+            # Set chunk interval to 1 day for 10GB/day
+            conn.execute(text("""
+                SELECT set_chunk_time_interval('sensor_data', INTERVAL '1 day');
+            """))
+            conn.commit()
+            print("✓ Set chunk interval to 1 day")
+            
+            # Create additional indexes for better query performance
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_sensor_data_tag_timestamp 
+                ON sensor_data (tag_id, timestamp DESC);
+            """))
+            conn.commit()
+            print("✓ Created optimized indexes")
+        except Exception as e:
+            print(f"⚠ Optimization warning: {e}")
+        
+        # Optimize for high-volume writes (10GB/day)
+        print("\nOptimizing hypertable for high-volume data ingestion...")
+        try:
+            # Set chunk interval to 1 day for 10GB/day
+            conn.execute(text("""
+                SELECT set_chunk_time_interval('sensor_data', INTERVAL '1 day');
+            """))
+            conn.commit()
+            print("✓ Set chunk interval to 1 day")
+            
+            # Create additional indexes for better query performance
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_sensor_data_tag_timestamp 
+                ON sensor_data (tag_id, timestamp DESC);
+            """))
+            conn.commit()
+            print("✓ Created optimized indexes")
+        except Exception as e:
+            print(f"⚠ Optimization warning: {e}")
 
 
 def create_initial_users(db):

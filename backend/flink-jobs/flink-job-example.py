@@ -14,11 +14,14 @@ from datetime import datetime
 import json
 import sys
 import os
+import logging
 
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SensorDataProcessor(MapFunction):
@@ -92,24 +95,59 @@ class AnomalyDetector(KeyedProcessFunction):
         yield value
 
 
-def create_flink_job():
-    """Create and configure Flink streaming job"""
+def create_flink_job(low_latency: bool = False):
+    """
+    Create and configure Flink streaming job
+    
+    Args:
+        low_latency: If True, optimize for millisecond latency (for critical controls)
+    """
     env = StreamExecutionEnvironment.get_execution_environment()
     
-    # Enable checkpointing for exactly-once semantics
-    env.enable_checkpointing(60000)  # Checkpoint every 60 seconds
-    env.get_checkpoint_config().set_checkpoint_timeout(120000)
-    env.get_checkpoint_config().set_min_pause_between_checkpoints(30000)
+    if low_latency:
+        # Low-latency configuration for critical controls
+        # Disable checkpointing for lowest latency (trade-off: no exactly-once guarantee)
+        # env.enable_checkpointing(1000)  # Very frequent checkpoints if needed
+        # Or disable completely for absolute lowest latency:
+        # Checkpointing disabled - use at-most-once semantics for critical controls
+        
+        # Set higher parallelism for better throughput
+        env.set_parallelism(4)
+        
+        # Set buffer timeout to 0 for immediate processing
+        env.set_buffer_timeout(0)  # Process immediately, no buffering
+        
+        # Use processing time instead of event time for lower latency
+        # (Event time requires watermarks which add latency)
+        
+        logger.info("Flink job configured for LOW-LATENCY mode (millisecond processing)")
+    else:
+        # Standard configuration for reliability
+        # Enable checkpointing for exactly-once semantics
+        env.enable_checkpointing(60000)  # Checkpoint every 60 seconds
+        env.get_checkpoint_config().set_checkpoint_timeout(120000)
+        env.get_checkpoint_config().set_min_pause_between_checkpoints(30000)
+        
+        # Set parallelism
+        env.set_parallelism(2)
+        
+        # Standard buffer timeout
+        env.set_buffer_timeout(100)  # 100ms buffer timeout
     
-    # Set parallelism
-    env.set_parallelism(2)
-    
-    # Kafka consumer properties
+    # Kafka consumer properties - optimized for latency
     kafka_props = {
         "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS,
-        "group.id": "flink-sensor-processor",
-        "auto.offset.reset": "earliest"
+        "group.id": "flink-sensor-processor" + ("-lowlatency" if low_latency else ""),
+        "auto.offset.reset": "latest" if low_latency else "earliest",  # Latest for real-time
     }
+    
+    # Add low-latency consumer settings
+    if low_latency:
+        kafka_props.update({
+            "fetch.min.bytes": "1",  # Minimum bytes to fetch
+            "fetch.max.wait.ms": "0",  # No wait for immediate fetch
+            "max.partition.fetch.bytes": "1048576",  # 1MB - smaller for lower latency
+        })
     
     # Kafka consumer for raw sensor data
     kafka_consumer = FlinkKafkaConsumer(
@@ -126,13 +164,26 @@ def create_flink_job():
         .map(SensorDataProcessor()) \
         .filter(lambda x: x is not None)
     
+    # Kafka producer configuration - optimized for latency
+    producer_base_config = {
+        "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS
+    }
+    
+    if low_latency:
+        # Low-latency producer settings
+        producer_base_config.update({
+            "acks": "1",  # Leader acknowledgment only (faster than "all")
+            "linger.ms": "0",  # No batching delay
+            "batch.size": "1",  # Small batch size
+            "compression.type": "none",  # No compression for lower latency
+            "request.timeout.ms": "5000",  # Lower timeout
+        })
+    
     # Kafka producer for processed data
     processed_producer = FlinkKafkaProducer(
         topic="processed-data",
         serialization_schema=SimpleStringSchema(),
-        producer_config={
-            "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS
-        }
+        producer_config=producer_base_config.copy()
     )
     
     # Write processed data to Kafka
@@ -142,9 +193,7 @@ def create_flink_job():
     alert_producer = FlinkKafkaProducer(
         topic="alerts",
         serialization_schema=SimpleStringSchema(),
-        producer_config={
-            "bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS
-        }
+        producer_config=producer_base_config.copy()
     )
     
     # Detect anomalies and generate alerts
@@ -158,7 +207,23 @@ def create_flink_job():
     return env
 
 
+def create_critical_control_job():
+    """Create Flink job optimized for critical control commands (low-latency)"""
+    return create_flink_job(low_latency=True)
+
+
 if __name__ == "__main__":
-    env = create_flink_job()
-    env.execute("Sensor Data Processing Job")
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Flink Stream Processing Job")
+    parser.add_argument(
+        "--low-latency",
+        action="store_true",
+        help="Enable low-latency mode for critical controls (millisecond processing)"
+    )
+    args = parser.parse_args()
+    
+    env = create_flink_job(low_latency=args.low_latency)
+    job_name = "Critical Control Processing Job" if args.low_latency else "Sensor Data Processing Job"
+    env.execute(job_name)
 

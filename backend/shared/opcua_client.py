@@ -160,49 +160,140 @@ class OPCUAClient:
 
 
 class ModbusTCPClient:
-    """Modbus TCP client wrapper (mock implementation)"""
+    """Modbus TCP client wrapper with security validation"""
     
-    def __init__(self, host: str, port: int = 502):
+    def __init__(self, host: str, port: int = 502, unit_id: int = 1):
         self.host = host
         self.port = port
+        self.unit_id = unit_id
         self.connected = False
-        logger.warning("Modbus TCP client is mock implementation")
+        self.client = None
+        
+        try:
+            from pymodbus.client import ModbusTcpClient as PyModbusClient
+            self.pymodbus_available = True
+            self.PyModbusClient = PyModbusClient
+        except ImportError:
+            self.pymodbus_available = False
+            logger.warning("pymodbus not available, using mock implementation")
     
     def connect(self) -> bool:
-        """Connect to Modbus server"""
+        """Connect to Modbus server with security validation"""
         try:
-            # In production, use pymodbus library
-            # from pymodbus.client import ModbusTcpClient
-            # self.client = ModbusTcpClient(self.host, port=self.port)
-            # self.connected = self.client.connect()
+            if self.pymodbus_available:
+                self.client = self.PyModbusClient(self.host, port=self.port)
+                self.connected = self.client.connect()
+            else:
+                # Mock connection
+                logger.info(f"Mock connection to Modbus TCP: {self.host}:{self.port}")
+                self.connected = True
             
-            logger.info(f"Mock connection to Modbus TCP: {self.host}:{self.port}")
-            self.connected = True
-            return True
+            if self.connected:
+                logger.info(f"Connected to Modbus TCP: {self.host}:{self.port}")
+            
+            return self.connected
         except Exception as e:
             logger.error(f"Failed to connect to Modbus: {e}")
             return False
     
     def disconnect(self):
         """Disconnect from Modbus server"""
+        if self.client and self.connected:
+            try:
+                self.client.close()
+            except Exception:
+                pass
         self.connected = False
         logger.info("Disconnected from Modbus TCP")
     
-    def read_holding_registers(self, address: int, count: int) -> Optional[List[int]]:
-        """Read holding registers"""
+    def read_holding_registers(
+        self,
+        address: int,
+        count: int,
+        source_ip: str = "127.0.0.1"
+    ) -> Optional[List[int]]:
+        """Read holding registers with security validation"""
         if not self.connected:
             return None
         
-        # Mock implementation
-        logger.info(f"Mock read holding registers: address={address}, count={count}")
-        return [0] * count
+        # Validate packet (mock packet structure for validation)
+        import struct
+        transaction_id = 1
+        protocol_id = 0
+        function_code = 3  # Read Holding Registers
+        data = struct.pack(">HH", address, count)
+        
+        # Validate with industrial firewall
+        from .industrial_security import industrial_firewall
+        is_valid, error = industrial_firewall.validate_industrial_packet(
+            protocol="modbus",
+            source_ip=source_ip,
+            source_mac="00:00:00:00:00:00",  # Would be extracted from packet
+            packet_data=struct.pack(">HHHBB", transaction_id, protocol_id, 6, self.unit_id, function_code) + data
+        )
+        
+        if not is_valid:
+            logger.warning(f"Modbus packet validation failed: {error}")
+            return None
+        
+        try:
+            if self.pymodbus_available and self.client:
+                result = self.client.read_holding_registers(address, count, unit=self.unit_id)
+                if result.isError():
+                    logger.error(f"Modbus read error: {result}")
+                    return None
+                return result.registers
+            else:
+                # Mock implementation
+                logger.info(f"Mock read holding registers: address={address}, count={count}")
+                return [0] * count
+        except Exception as e:
+            logger.error(f"Error reading Modbus registers: {e}")
+            return None
     
-    def write_register(self, address: int, value: int) -> bool:
-        """Write single register"""
+    def write_register(
+        self,
+        address: int,
+        value: int,
+        source_ip: str = "127.0.0.1"
+    ) -> bool:
+        """Write single register with security validation"""
         if not self.connected:
             return False
         
-        # Mock implementation
-        logger.info(f"Mock write register: address={address}, value={value}")
-        return True
+        # Validate write operation
+        import struct
+        transaction_id = 1
+        protocol_id = 0
+        function_code = 6  # Write Single Register
+        data = struct.pack(">HH", address, value)
+        
+        # Validate with industrial firewall
+        from .industrial_security import industrial_firewall
+        is_valid, error = industrial_firewall.validate_industrial_packet(
+            protocol="modbus",
+            source_ip=source_ip,
+            source_mac="00:00:00:00:00:00",
+            packet_data=struct.pack(">HHHBB", transaction_id, protocol_id, 6, self.unit_id, function_code) + data
+        )
+        
+        if not is_valid:
+            logger.warning(f"Modbus write validation failed: {error}")
+            return False
+        
+        try:
+            if self.pymodbus_available and self.client:
+                result = self.client.write_register(address, value, unit=self.unit_id)
+                if result.isError():
+                    logger.error(f"Modbus write error: {result}")
+                    return False
+                logger.info(f"Wrote register {address} = {value}")
+                return True
+            else:
+                # Mock implementation
+                logger.info(f"Mock write register: address={address}, value={value}")
+                return True
+        except Exception as e:
+            logger.error(f"Error writing Modbus register: {e}")
+            return False
 

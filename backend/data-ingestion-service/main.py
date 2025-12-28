@@ -2,17 +2,26 @@
 Data Ingestion Service
 Manages connectors, schema validation, and DLQ handling
 """
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-import uvicorn
-import sys
-import os
 import asyncio
+import json
+import os
+import sys
+import time
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+try:
+    from dateutil.parser import parse as parse_date
+except ImportError:
+    # Fallback if dateutil not available
+    def parse_date(s):
+        from datetime import datetime
+        return datetime.fromisoformat(s.replace('Z', '+00:00'))
 
-from prometheus_client import Counter
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import Counter, Histogram
+from pydantic import BaseModel, Field
+import uvicorn
 
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
@@ -22,7 +31,12 @@ from models import SensorData, Tag
 from config import settings
 from logging_config import setup_logging
 from kafka_utils import KafkaProducerWrapper, KafkaConsumerWrapper, KAFKA_TOPICS
-from opcua_client import OPCUAClient
+from opcua_client import OPCUAClient, ModbusTCPClient
+from industrial_security import industrial_firewall
+from offline_buffer import OfflineBufferManager
+from connection_monitor import ConnectionMonitor
+from edge_to_stream import edge_to_stream_bridge
+from sensor_health import sensor_health_monitor
 from auth import require_authentication, require_roles
 from metrics import setup_metrics
 from tracing import setup_tracing
@@ -49,6 +63,11 @@ app.add_middleware(
 kafka_producer = None
 opcua_client = None
 
+# Offline buffer and connection monitor
+offline_buffer = None
+connection_monitor = None
+retry_task = None
+
 VALIDATION_SUCCESS = Counter(
     "ingest_validation_success_total",
     "Successful records ingested",
@@ -58,6 +77,42 @@ VALIDATION_FAILURE = Counter(
     "ingest_validation_failure_total",
     "Records rejected during ingestion",
     ["source", "reason"],
+)
+
+INGEST_LATENCY = Histogram(
+    "ingest_request_latency_seconds",
+    "Latency of ingest request processing",
+    ["source"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20),
+)
+INGEST_RECORDS_PER_REQUEST = Histogram(
+    "ingest_records_per_request",
+    "Number of records processed per ingestion request",
+    ["source"],
+    buckets=(1, 5, 10, 20, 50, 100, 200, 500, 1000),
+)
+INGEST_PAYLOAD_BYTES = Counter(
+    "ingest_payload_bytes_total",
+    "Total bytes of sensor payload persisted",
+    ["source"],
+)
+
+BUFFERED_RECORDS = Counter(
+    "ingest_buffered_records_total",
+    "Records buffered due to offline status",
+    ["source"],
+)
+
+RETRY_ATTEMPTS = Counter(
+    "ingest_retry_attempts_total",
+    "Total retry attempts for buffered records",
+    ["source", "status"],  # status: success, failure
+)
+
+CONNECTION_STATUS = Counter(
+    "ingest_connection_status_changes_total",
+    "Connection status changes (online/offline)",
+    ["status"],
 )
 
 def _record_validation(source: str, success: bool, reason: str = ""):
@@ -103,15 +158,75 @@ class ConnectorConfig(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and Kafka on startup"""
-    global kafka_producer, opcua_client
+    global kafka_producer, opcua_client, offline_buffer, connection_monitor, retry_task
     logger.info("Starting data ingestion service...")
     try:
         kafka_producer = KafkaProducerWrapper(KAFKA_TOPICS["RAW_SENSOR_DATA"])
+        
+        # Initialize offline buffer if enabled
+        if settings.OFFLINE_BUFFER_ENABLED:
+            offline_buffer = OfflineBufferManager(
+                buffer_path=settings.OFFLINE_BUFFER_PATH,
+                max_buffer_size=settings.OFFLINE_BUFFER_MAX_SIZE,
+                max_buffer_size_mb=settings.OFFLINE_BUFFER_MAX_SIZE_MB,
+                cleanup_interval=settings.OFFLINE_BUFFER_CLEANUP_INTERVAL
+            )
+            logger.info("Offline buffer initialized")
+        
+        # Initialize Edge-to-Stream bridge
+        if settings.EDGE_COMPUTING_ENABLED:
+            edge_to_stream_bridge.initialize()
+            asyncio.create_task(edge_to_stream_bridge.periodic_flush())
+            logger.info("Edge-to-Stream bridge initialized")
+        
+        # Initialize connection monitor if enabled
+        if settings.CONNECTION_MONITOR_ENABLED:
+            check_hosts = []
+            if settings.CONNECTION_CHECK_HOSTS:
+                check_hosts = [h.strip() for h in settings.CONNECTION_CHECK_HOSTS.split(",")]
+            
+            check_urls = []
+            if settings.CONNECTION_CHECK_URLS:
+                check_urls = [u.strip() for u in settings.CONNECTION_CHECK_URLS.split(",")]
+            
+            # Add Kafka and TimescaleDB to check hosts if not specified
+            if not check_hosts and not check_urls:
+                # Parse Kafka bootstrap servers
+                for server in settings.KAFKA_BOOTSTRAP_SERVERS.split(","):
+                    server = server.strip()
+                    if ":" in server:
+                        check_hosts.append(server)
+                    else:
+                        check_hosts.append(f"{server}:9092")
+            
+            connection_monitor = ConnectionMonitor(
+                check_interval=settings.CONNECTION_CHECK_INTERVAL,
+                timeout=settings.CONNECTION_CHECK_TIMEOUT,
+                check_urls=check_urls,
+                check_hosts=check_hosts
+            )
+            
+            # Add callback for connection status changes
+            def on_connection_change(is_online: bool):
+                status = "online" if is_online else "offline"
+                CONNECTION_STATUS.labels(status=status).inc()
+                logger.info(f"Connection status changed: {status}")
+                if is_online and offline_buffer:
+                    # Start retry task when connection is restored
+                    asyncio.create_task(retry_buffered_records())
+            
+            connection_monitor.add_callback(on_connection_change)
+            connection_monitor.start_monitoring()
+            logger.info("Connection monitor started")
         
         # Initialize OPC-UA client if configured
         if settings.OPCUA_SERVER_URL:
             opcua_client = OPCUAClient()
             opcua_client.connect()
+        
+        # Start retry task
+        if offline_buffer:
+            retry_task = asyncio.create_task(retry_buffered_records_loop())
         
         logger.info("Data ingestion service ready. Ensure TimescaleDB migrations are applied.")
     except Exception as e:
@@ -121,6 +236,20 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
+    global retry_task
+    if retry_task:
+        retry_task.cancel()
+        try:
+            await retry_task
+        except asyncio.CancelledError:
+            pass
+    
+    if connection_monitor:
+        connection_monitor.stop_monitoring()
+    
+    if offline_buffer:
+        offline_buffer.shutdown()
+    
     if kafka_producer:
         kafka_producer.close()
     if opcua_client:
@@ -136,6 +265,8 @@ async def ingest_data(
     _: Dict[str, Any] = Depends(require_ingest_read)
 ) -> IngestResponse:
     """Ingest sensor data"""
+    start_time = time.perf_counter()
+    payload_bytes = 0
     try:
         validated_records = []
 
@@ -191,36 +322,100 @@ async def ingest_data(
                     detail=f"Invalid data_quality for {record.sensor_id}"
                 )
 
+            # Sensor health monitoring and drift detection
+            health_status = sensor_health_monitor.assess_health(
+                sensor_id=record.sensor_id,
+                value=record.value,
+                timestamp=record.timestamp,
+                expected_range=(
+                    tag.valid_range_min,
+                    tag.valid_range_max
+                ) if tag.valid_range_min is not None and tag.valid_range_max is not None else None
+            )
+            
+            # Use corrected value if drift detected
+            final_value = record.value
+            if health_status.correction_applied and health_status.corrected_value is not None:
+                final_value = health_status.corrected_value
+                record.data_quality = health_status.data_quality
+            
             db_record = SensorData(
                 timestamp=record.timestamp,
                 tag_id=record.sensor_id,
-                value=record.value,
-                data_quality=record.data_quality
+                value=final_value,
+                data_quality=health_status.data_quality if health_status.correction_applied else record.data_quality
             )
             tsdb.add(db_record)
             validated_records.append(record.dict())
             _record_validation(request.source, True)
+            payload_bytes += len(json.dumps(record.dict(), default=str).encode("utf-8"))
 
         tsdb.commit()
         
-        # Publish to Kafka in background
-        if kafka_producer and validated_records:
-            background_tasks.add_task(
-                publish_to_kafka,
-                validated_records,
-                request.source
-            )
+        # Publish to Kafka or buffer if offline
+        if validated_records:
+            if connection_monitor and not connection_monitor.is_online:
+                # System is offline - buffer records
+                buffer_records(validated_records, request.source)
+            elif kafka_producer:
+                # System is online - publish to Kafka
+                background_tasks.add_task(
+                    publish_to_kafka,
+                    validated_records,
+                    request.source
+                )
+            else:
+                # No Kafka producer - buffer records
+                if offline_buffer:
+                    buffer_records(validated_records, request.source)
+                else:
+                    logger.warning("No Kafka producer and no buffer - records may be lost")
         
         logger.info(f"Ingested {len(validated_records)} records from {request.source}")
         
+        duration = time.perf_counter() - start_time
+        INGEST_LATENCY.labels(source=request.source).observe(duration)
+        INGEST_RECORDS_PER_REQUEST.labels(source=request.source).observe(len(validated_records))
+        if payload_bytes:
+            INGEST_PAYLOAD_BYTES.labels(source=request.source).inc(payload_bytes)
+
         return IngestResponse(
             status="success",
             records_ingested=len(validated_records),
             source=request.source
         )
     except Exception as e:
+        duration = time.perf_counter() - start_time
+        INGEST_LATENCY.labels(source=request.source).observe(duration)
+        INGEST_RECORDS_PER_REQUEST.labels(source=request.source).observe(len(validated_records))
+        if payload_bytes:
+            INGEST_PAYLOAD_BYTES.labels(source=request.source).inc(payload_bytes)
         logger.error(f"Ingestion error: {e}")
         raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+
+
+def buffer_records(records: List[dict], source: str):
+    """Buffer records when offline"""
+    if not offline_buffer:
+        logger.warning("Offline buffer not available - records may be lost")
+        return
+    
+    buffered_count = 0
+    for record in records:
+        record_id = f"{source}_{record['sensor_id']}_{record['timestamp']}"
+        timestamp = record.get('timestamp')
+        if isinstance(timestamp, str):
+            timestamp = parse_date(timestamp).timestamp()
+        elif isinstance(timestamp, datetime):
+            timestamp = timestamp.timestamp()
+        else:
+            timestamp = time.time()
+        
+        if offline_buffer.add_record(record_id, source, record, timestamp):
+            buffered_count += 1
+            BUFFERED_RECORDS.labels(source=source).inc()
+    
+    logger.info(f"Buffered {buffered_count}/{len(records)} records from {source}")
 
 
 def publish_to_kafka(records: List[dict], source: str):
@@ -232,6 +427,72 @@ def publish_to_kafka(records: List[dict], source: str):
         logger.info(f"Published {len(records)} records to Kafka")
     except Exception as e:
         logger.error(f"Failed to publish to Kafka: {e}")
+        # If publish fails and buffer is available, buffer the records
+        if offline_buffer:
+            logger.info("Buffering records due to Kafka publish failure")
+            buffer_records(records, source)
+
+
+async def retry_buffered_records():
+    """Retry sending buffered records when connection is restored"""
+    if not offline_buffer or not kafka_producer:
+        return
+    
+    if not connection_monitor or not connection_monitor.is_online:
+        return
+    
+    logger.info("Retrying buffered records...")
+    pending = offline_buffer.get_pending_records(limit=1000)
+    
+    if not pending:
+        return
+    
+    logger.info(f"Found {len(pending)} pending records to retry")
+    
+    success_count = 0
+    failure_count = 0
+    
+    for record_info in pending:
+        try:
+            record = record_info["data"]
+            source = record_info["source"]
+            record_id = record_info["record_id"]
+            
+            # Try to publish
+            kafka_producer.send(record["sensor_id"], record)
+            kafka_producer.flush()
+            
+            # Mark as sent
+            offline_buffer.mark_sent(record_id)
+            success_count += 1
+            RETRY_ATTEMPTS.labels(source=source, status="success").inc()
+            
+        except Exception as e:
+            logger.warning(f"Failed to retry record {record_info['record_id']}: {e}")
+            offline_buffer.mark_failed(record_info["record_id"])
+            failure_count += 1
+            RETRY_ATTEMPTS.labels(source=record_info["source"], status="failure").inc()
+    
+    if success_count > 0:
+        logger.info(f"Successfully retried {success_count} buffered records")
+    if failure_count > 0:
+        logger.warning(f"Failed to retry {failure_count} buffered records")
+
+
+async def retry_buffered_records_loop():
+    """Background task to periodically retry buffered records"""
+    import asyncio
+    
+    while True:
+        try:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            if connection_monitor and connection_monitor.is_online:
+                await retry_buffered_records()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in retry loop: {e}")
+            await asyncio.sleep(60)  # Wait longer on error
 
 
 @app.get("/connectors")
@@ -327,15 +588,153 @@ async def write_opcua_node(
     return {"message": "Value written successfully", "node_id": node_id, "value": value}
 
 
+@app.post("/stream/opcua")
+async def stream_from_opcua(
+    node_id: str,
+    value: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Stream data directly from OPC UA to Flink via Edge-to-Stream bridge"""
+    if not settings.EDGE_COMPUTING_ENABLED:
+        raise HTTPException(status_code=503, detail="Edge Computing not enabled")
+    
+    success = await edge_to_stream_bridge.stream_from_opcua(
+        node_id=node_id,
+        value=value,
+        metadata=metadata
+    )
+    
+    if success:
+        return {"status": "streamed", "node_id": node_id}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to stream data")
+
+
+@app.post("/stream/modbus")
+async def stream_from_modbus(
+    device_id: int,
+    register_address: int,
+    value: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Stream data directly from Modbus to Flink via Edge-to-Stream bridge"""
+    if not settings.EDGE_COMPUTING_ENABLED:
+        raise HTTPException(status_code=503, detail="Edge Computing not enabled")
+    
+    success = await edge_to_stream_bridge.stream_from_modbus(
+        device_id=device_id,
+        register_address=register_address,
+        value=value,
+        metadata=metadata
+    )
+    
+    if success:
+        return {"status": "streamed", "device_id": device_id, "register": register_address}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to stream data")
+
+
+@app.get("/sensor-health/{sensor_id}")
+async def get_sensor_health(
+    sensor_id: str,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get sensor health status and drift information"""
+    summary = sensor_health_monitor.get_health_summary()
+    if sensor_id not in summary:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    return summary[sensor_id]
+
+
+@app.get("/sensor-health")
+async def get_all_sensor_health(
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get health summary for all sensors"""
+    return sensor_health_monitor.get_health_summary()
+
+
+@app.get("/edge-stream/stats")
+async def get_edge_stream_stats(
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get Edge-to-Stream latency statistics"""
+    if not settings.EDGE_COMPUTING_ENABLED:
+        raise HTTPException(status_code=503, detail="Edge Computing not enabled")
+    
+    return edge_to_stream_bridge.get_latency_stats()
+
+
 @app.get("/health")
 async def health(tsdb: Session = Depends(get_timescale_db)):
     """Health check"""
     records_count = tsdb.query(SensorData).count()
-    return {
+    
+    health_data = {
         "status": "healthy",
         "records_in_db": records_count,
         "kafka_connected": kafka_producer is not None,
         "opcua_connected": opcua_client.connected if opcua_client else False
+    }
+    
+    # Add connection status
+    if connection_monitor:
+        conn_status = connection_monitor.get_status()
+        health_data["connection_status"] = conn_status
+        health_data["is_online"] = conn_status["is_online"]
+    
+    # Add buffer stats
+    if offline_buffer:
+        buffer_stats = offline_buffer.get_buffer_stats()
+        health_data["buffer_stats"] = buffer_stats
+        health_data["buffered_records"] = buffer_stats.get("total_records", 0)
+    
+    return health_data
+
+
+@app.get("/buffer/stats")
+async def get_buffer_stats(
+    _: Dict[str, Any] = Depends(require_ingest_admin)
+):
+    """Get offline buffer statistics"""
+    if not offline_buffer:
+        raise HTTPException(status_code=404, detail="Offline buffer not enabled")
+    
+    return offline_buffer.get_buffer_stats()
+
+
+@app.post("/buffer/retry")
+async def manual_retry(
+    _: Dict[str, Any] = Depends(require_ingest_admin)
+):
+    """Manually trigger retry of buffered records"""
+    if not offline_buffer:
+        raise HTTPException(status_code=404, detail="Offline buffer not enabled")
+    
+    await retry_buffered_records()
+    stats = offline_buffer.get_buffer_stats()
+    
+    return {
+        "message": "Retry triggered",
+        "buffered_records": stats.get("total_records", 0)
+    }
+
+
+@app.delete("/buffer/clear")
+async def clear_buffer(
+    source: Optional[str] = None,
+    _: Dict[str, Any] = Depends(require_ingest_admin)
+):
+    """Clear buffered records (optionally for a specific source)"""
+    if not offline_buffer:
+        raise HTTPException(status_code=404, detail="Offline buffer not enabled")
+    
+    deleted = offline_buffer.clear_buffer(source=source)
+    return {
+        "message": f"Cleared {deleted} records from buffer",
+        "deleted_count": deleted
     }
 
 

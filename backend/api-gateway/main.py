@@ -53,6 +53,8 @@ SERVICES = {
     "command-control": "http://command-control-service:8006",
     "tag-catalog": "http://tag-catalog-service:8007",
     "digital-twin": "http://digital-twin-service:8008",
+    "edge-computing": "http://edge-computing-service:8009",
+    "erp-integration": "http://erp-integration-service:8010",
 }
 
 SERVICE_ROLE_REQUIREMENTS = {
@@ -63,6 +65,8 @@ SERVICE_ROLE_REQUIREMENTS = {
     "command-control": {"system_admin"},
     "tag-catalog": {"system_admin", "data_engineer"},
     "digital-twin": {"system_admin", "data_engineer"},
+    "edge-computing": {"system_admin", "data_engineer", "field_operator"},
+    "erp-integration": {"system_admin", "data_engineer"},
 }
 
 

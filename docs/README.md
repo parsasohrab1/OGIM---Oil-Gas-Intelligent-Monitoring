@@ -244,6 +244,7 @@ python advanced_data_generator.py
 #### 2. یادگیری ماشین (Machine Learning)
 - ✅ **Anomaly Detection** با Isolation Forest
 - ✅ **Failure Prediction** با Random Forest
+- ✅ **Time Series Forecasting** با LSTM (شبکه‌های عصبی بازگشتی)
 - ✅ مدیریت مدل‌ها با MLflow
 - ✅ Training و Inference بلادرنگ
 - ✅ Model versioning و A/B testing

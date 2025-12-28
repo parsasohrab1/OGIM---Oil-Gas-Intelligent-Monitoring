@@ -94,6 +94,8 @@ class Alert(Base):
     acknowledged_at = Column(DateTime, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
     metadata_json = Column(JSON, nullable=True)
+    erp_work_order_id = Column(String(100), nullable=True, index=True)  # Link to ERP work order
+    equipment_id = Column(String(100), nullable=True)  # Equipment identifier
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -136,6 +138,7 @@ class Command(Base):
     executed_at = Column(DateTime, nullable=True)
     requires_two_factor = Column(Boolean, default=True)
     execution_result = Column(JSON, nullable=True)
+    erp_work_order_id = Column(String(100), nullable=True, index=True)  # Link to ERP work order
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

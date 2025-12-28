@@ -303,7 +303,7 @@ OGIM یک سیستم نظارت و تحلیل هوشمند با معماری م�
 **ML Models:**
 - Isolation Forest (anomaly detection)
 - Random Forest (failure prediction)
-- LSTM (time series forecasting) - آینده
+- ✅ LSTM (time series forecasting) - پیاده‌سازی شده
 
 ### 4. Alert Service (سرویس هشدار)
 
@@ -582,14 +582,17 @@ spec:
 
 ### Performance Targets
 
-| Metric | Target | Current |
-|--------|--------|---------|
-| API Response Time | < 100ms | ~50ms |
-| Throughput | 10K req/sec | 8K req/sec |
-| Kafka Latency | < 50ms | ~30ms |
-| Flink Processing | < 1 sec | ~500ms |
-| Database Queries | < 10ms | ~5ms |
-| Uptime | 99.9% | 99.95% |
+| Metric | Target | Current | Critical Controls |
+|--------|--------|---------|-------------------|
+| API Response Time | < 100ms | ~50ms | < 10ms |
+| Throughput | 10K req/sec | 8K req/sec | 5K req/sec |
+| Kafka Latency | < 50ms | ~30ms | < 5ms |
+| Flink Processing | < 1 sec | ~500ms | < 10ms |
+| Database Queries | < 10ms | ~5ms | < 5ms |
+| End-to-End Latency | < 1 sec | ~500ms | < 10ms |
+| Uptime | 99.9% | 99.95% | 99.9% |
+
+**نکته**: برای کنترل‌های بحرانی، Low-Latency Mode فعال می‌شود که تاخیر را به زیر 10ms می‌رساند. برای جزئیات بیشتر به [`docs/LATENCY_OPTIMIZATION.md`](LATENCY_OPTIMIZATION.md) مراجعه کنید.
 
 ---
 

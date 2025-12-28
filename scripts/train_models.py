@@ -42,6 +42,11 @@ def train_models(model: str) -> None:
         manager.train_failure_prediction_model()
         manager.load_model("failure-prediction")
 
+    if model in {"time_series_forecast", "all"}:
+        logger.info("Training time series forecast model (LSTM)...")
+        manager.train_time_series_model()
+        manager.load_model("time-series-forecast")
+
     logger.info("Reloading registry models...")
     manager.load_registered_models()
     logger.info("Training completed.")
@@ -51,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train OGIM ML inference models.")
     parser.add_argument(
         "--model",
-        choices=["anomaly_detection", "failure_prediction", "all"],
+        choices=["anomaly_detection", "failure_prediction", "time_series_forecast", "all"],
         default="all",
         help="Model to train (default: all).",
     )
