@@ -23,6 +23,8 @@ from config import settings
 from security import decode_token
 from metrics import setup_metrics
 from tracing import setup_tracing
+from advanced_rate_limiter import get_rate_limiter, RateLimitConfig
+from mtls_manager import get_mtls_manager
 
 app = FastAPI(
     title="OGIM API Gateway",
@@ -32,6 +34,18 @@ app = FastAPI(
 
 setup_metrics(app, "api-gateway")
 setup_tracing(app, "api-gateway", instrument_httpx=True)
+
+# Initialize rate limiter
+rate_limiter = get_rate_limiter(redis_url=settings.RATE_LIMIT_REDIS_URL)
+
+# Initialize mTLS manager
+mtls_manager = get_mtls_manager(
+    cert_dir=settings.MTLS_CERT_DIR,
+    ca_cert_path=settings.MTLS_CA_CERT_PATH,
+    client_cert_path=settings.MTLS_CLIENT_CERT_PATH,
+    client_key_path=settings.MTLS_CLIENT_KEY_PATH
+)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
@@ -44,17 +58,25 @@ app.add_middleware(
 security = HTTPBearer()
 
 # Service discovery (in production, use service mesh or discovery service)
+# Use localhost for local development, service names for Docker
+import os
+SERVICE_HOST = os.getenv("SERVICE_HOST", "localhost")  # Default to localhost for local dev
+
 SERVICES = {
-    "auth": "http://auth-service:8001",
-    "data-ingestion": "http://data-ingestion-service:8002",
-    "ml-inference": "http://ml-inference-service:8003",
-    "alert": "http://alert-service:8004",
-    "reporting": "http://reporting-service:8005",
-    "command-control": "http://command-control-service:8006",
-    "tag-catalog": "http://tag-catalog-service:8007",
-    "digital-twin": "http://digital-twin-service:8008",
-    "edge-computing": "http://edge-computing-service:8009",
-    "erp-integration": "http://erp-integration-service:8010",
+    "auth": f"http://{SERVICE_HOST}:8001",
+    "data-ingestion": f"http://{SERVICE_HOST}:8002",
+    "ml-inference": f"http://{SERVICE_HOST}:8003",
+    "alert": f"http://{SERVICE_HOST}:8004",
+    "reporting": f"http://{SERVICE_HOST}:8005",
+    "command-control": f"http://{SERVICE_HOST}:8006",
+    "tag-catalog": f"http://{SERVICE_HOST}:8007",
+    "digital-twin": f"http://{SERVICE_HOST}:8008",
+    "edge-computing": f"http://{SERVICE_HOST}:8009",
+    "erp-integration": f"http://{SERVICE_HOST}:8010",
+    "dvr": f"http://{SERVICE_HOST}:8011",
+    "remote-operations": f"http://{SERVICE_HOST}:8012",
+    "data-variables": f"http://{SERVICE_HOST}:8013",
+    "storage-optimization": f"http://{SERVICE_HOST}:8014",
 }
 
 SERVICE_ROLE_REQUIREMENTS = {
@@ -67,6 +89,10 @@ SERVICE_ROLE_REQUIREMENTS = {
     "digital-twin": {"system_admin", "data_engineer"},
     "edge-computing": {"system_admin", "data_engineer", "field_operator"},
     "erp-integration": {"system_admin", "data_engineer"},
+    "dvr": {"system_admin", "data_engineer"},
+    "remote-operations": {"system_admin", "field_operator"},
+    "data-variables": {"system_admin", "data_engineer", "field_operator"},
+    "storage-optimization": {"system_admin", "data_engineer"},
 }
 
 
@@ -91,6 +117,57 @@ async def authenticate_request(request: Request):
     return payload
 
 
+async def check_rate_limit(request: Request, service_name: str):
+    """Check rate limit for request"""
+    if not settings.RATE_LIMIT_ENABLED:
+        return True
+    
+    # Get client identifier
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Get user identifier if authenticated
+    user_id = None
+    user_role = None
+    if hasattr(request.state, 'user'):
+        user_id = request.state.user.get("sub")
+        user_role = request.state.user.get("role")
+    
+    # Use user ID if available, otherwise IP
+    identifier = user_id or client_ip
+    
+    # Get rate limit configuration
+    limit_config = RateLimitConfig.get_limit(service_name, user_role)
+    
+    # Check rate limit
+    allowed, info = await rate_limiter.check_rate_limit(
+        identifier=identifier,
+        endpoint=service_name,
+        max_requests=limit_config["max_requests"],
+        window_seconds=limit_config["window_seconds"],
+        strategy=settings.RATE_LIMIT_STRATEGY
+    )
+    
+    if not allowed:
+        logger.warning(
+            f"Rate limit exceeded: identifier={identifier}, "
+            f"service={service_name}, limit={limit_config}"
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please try again later.",
+            headers={
+                "X-RateLimit-Limit": str(limit_config["max_requests"]),
+                "X-RateLimit-Remaining": str(info.get("remaining", 0)),
+                "X-RateLimit-Reset": str(info.get("reset", 0)),
+                "Retry-After": str(limit_config["window_seconds"])
+            }
+        )
+    
+    # Add rate limit headers to response
+    request.state.rate_limit_info = info
+    return True
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -112,13 +189,17 @@ async def proxy_request(
     service_name: str,
     path: str,
     request: Request,
-    token: str = Depends(authenticate_request)
+    token: str = Depends(authenticate_request),
+    _: bool = Depends(lambda r, s=service_name: check_rate_limit(r, s))
 ):
     """Proxy requests to backend services"""
     if service_name not in SERVICES:
         raise HTTPException(status_code=404, detail=f"Service {service_name} not found")
     
-    service_url = SERVICES[service_name]
+    # Determine protocol (https if mTLS enabled, otherwise http)
+    protocol = "https" if (settings.MTLS_ENABLED and mtls_manager.mtls_enabled) else "http"
+    base_url = SERVICES[service_name].replace("http://", "").replace("https://", "")
+    service_url = f"{protocol}://{base_url}"
     target_url = f"{service_url}/{path}"
     
     required_roles = SERVICE_ROLE_REQUIREMENTS.get(service_name)
@@ -150,8 +231,15 @@ async def proxy_request(
     headers.pop("host", None)
     headers.pop("content-length", None)
     
+    # Get mTLS configuration if enabled
+    client_kwargs = {}
+    if settings.MTLS_ENABLED and mtls_manager.mtls_enabled:
+        client_kwargs = mtls_manager.get_httpx_client_kwargs(
+            verify=settings.MTLS_VERIFY_SERVER
+        )
+    
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(**client_kwargs) as client:
             response = await client.request(
                 method=request.method,
                 url=target_url,
@@ -182,13 +270,28 @@ async def proxy_request(
         detail = response_body if isinstance(response_body, (dict, list)) else {"message": response_body}
         raise HTTPException(status_code=response.status_code, detail=detail)
 
+    # Add rate limit headers to response
+    response_headers = {}
+    if hasattr(request.state, 'rate_limit_info'):
+        info = request.state.rate_limit_info
+        response_headers.update({
+            "X-RateLimit-Limit": str(info.get("limit", 0)),
+            "X-RateLimit-Remaining": str(info.get("remaining", 0)),
+            "X-RateLimit-Reset": str(info.get("reset", 0))
+        })
+    
     if isinstance(response_body, (dict, list)):
-        return JSONResponse(status_code=response.status_code, content=response_body)
+        return JSONResponse(
+            status_code=response.status_code,
+            content=response_body,
+            headers=response_headers
+        )
 
     return Response(
         content=response_body or "",
         status_code=response.status_code,
-        media_type=content_type or "text/plain"
+        media_type=content_type or "text/plain",
+        headers=response_headers
     )
 
 

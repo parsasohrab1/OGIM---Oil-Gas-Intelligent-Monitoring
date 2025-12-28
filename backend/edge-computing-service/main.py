@@ -24,6 +24,8 @@ from logging_config import setup_logging
 from metrics import setup_metrics
 from tracing import setup_tracing
 from auth import require_authentication, require_roles
+from disconnected_operation import get_disconnected_op_manager
+from connection_monitor import ConnectionMonitor
 
 # Setup logging
 logger = setup_logging("edge-computing-service")
@@ -44,6 +46,12 @@ app.add_middleware(
 # Edge processing modules
 edge_ml_models = {}
 edge_cache = {}
+
+# Initialize disconnected operation manager
+disconnected_op = get_disconnected_op_manager(
+    data_dir=os.getenv("EDGE_DATA_DIR", "./data/edge"),
+    sync_interval=int(os.getenv("EDGE_SYNC_INTERVAL", "60"))
+)
 
 
 class SensorDataPoint(BaseModel):
@@ -240,7 +248,10 @@ async def analyze_at_edge(
     request: EdgeAnalysisRequest,
     _: Dict[str, Any] = Depends(require_authentication)
 ):
-    """Perform analysis at edge without sending to cloud"""
+    """
+    Perform analysis at edge without sending to cloud
+    Works in both online and disconnected modes
+    """
     analysis_id = f"EDGE-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
     
     try:
@@ -251,6 +262,18 @@ async def analyze_at_edge(
             if alerts:
                 recommendations.append("Review sensor calibration")
                 recommendations.append("Check for equipment malfunction")
+                
+                # Store critical alerts in disconnected mode
+                for anomaly in alerts:
+                    if anomaly.get("z_score", 0) > 4:  # Very critical
+                        disconnected_op.add_critical_alert(
+                            alert_id=f"{analysis_id}-{anomaly['sensor_id']}",
+                            sensor_id=anomaly["sensor_id"],
+                            alert_type="anomaly",
+                            severity="critical",
+                            message=f"Critical anomaly detected: z-score={anomaly.get('z_score', 0):.2f}",
+                            data=anomaly
+                        )
         
         elif request.analysis_type == "threshold":
             # Get thresholds from cache or default
@@ -260,6 +283,18 @@ async def analyze_at_edge(
             recommendations = []
             if alerts:
                 recommendations.append("Immediate action required for critical alerts")
+                
+                # Store critical threshold alerts
+                for alert in alerts:
+                    if alert.get("severity") == "critical":
+                        disconnected_op.add_critical_alert(
+                            alert_id=f"{analysis_id}-{alert['sensor_id']}",
+                            sensor_id=alert["sensor_id"],
+                            alert_type="threshold",
+                            severity="critical",
+                            message=alert.get("message", "Threshold exceeded"),
+                            data=alert
+                        )
         
         elif request.analysis_type == "trend":
             results = trend_analysis(request.sensor_data)
@@ -268,11 +303,25 @@ async def analyze_at_edge(
             for sensor_id, trend_data in results.items():
                 if trend_data.get("trend") == "increasing" and trend_data.get("rate_of_change", 0) > 0.1:
                     recommendations.append(f"Sensor {sensor_id} shows rapid increase - monitor closely")
+                    
+                    # Record local decision for rapid changes
+                    disconnected_op.record_local_decision(
+                        decision_id=f"{analysis_id}-{sensor_id}",
+                        decision_type="trend_monitoring",
+                        action_taken="alert_operator",
+                        reason=f"Rapid increase detected: {trend_data.get('rate_of_change', 0):.2%}",
+                        sensor_id=sensor_id,
+                        data=trend_data
+                    )
         
         elif request.analysis_type == "aggregation":
             results = aggregation_analysis(request.sensor_data)
             alerts = []
             recommendations = []
+            
+            # Cache aggregated results
+            cache_key = f"aggregation:{request.well_name or 'default'}:{datetime.utcnow().strftime('%Y%m%d%H')}"
+            disconnected_op.cache_processed_data(cache_key, results, ttl_seconds=3600)
         
         else:
             raise HTTPException(status_code=400, detail=f"Unknown analysis type: {request.analysis_type}")
@@ -287,7 +336,10 @@ async def analyze_at_edge(
             timestamp=datetime.utcnow()
         )
         
-        logger.info(f"Edge analysis completed: {analysis_id}, type: {request.analysis_type}")
+        logger.info(
+            f"Edge analysis completed: {analysis_id}, type: {request.analysis_type}, "
+            f"online={disconnected_op.is_online}"
+        )
         return response
         
     except Exception as e:
@@ -371,11 +423,67 @@ async def get_cached_thresholds(
 @app.get("/health")
 async def health():
     """Health check"""
+    disconnected_status = disconnected_op.get_status()
     return {
         "status": "healthy",
         "service": "edge-computing",
         "cached_models": len(edge_ml_models),
-        "cached_thresholds": len(edge_cache.get("thresholds", {}))
+        "cached_thresholds": len(edge_cache.get("thresholds", {})),
+        "disconnected_operation": {
+            "is_online": disconnected_status.get("is_online", True),
+            "pending_alerts": disconnected_status.get("pending_alerts", 0),
+            "pending_decisions": disconnected_status.get("pending_decisions", 0),
+            "last_sync_time": disconnected_status.get("last_sync_time"),
+            "storage_size_mb": disconnected_status.get("storage_size_mb", 0)
+        }
+    }
+
+
+@app.get("/disconnected/status")
+async def get_disconnected_status(
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get disconnected operation status"""
+    return disconnected_op.get_status()
+
+
+@app.get("/disconnected/pending-alerts")
+async def get_pending_alerts(
+    limit: int = 100,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get pending critical alerts"""
+    return {
+        "alerts": disconnected_op.get_pending_critical_alerts(limit=limit),
+        "count": len(disconnected_op.get_pending_critical_alerts(limit=limit))
+    }
+
+
+@app.get("/disconnected/pending-decisions")
+async def get_pending_decisions(
+    limit: int = 100,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get pending local decisions"""
+    return {
+        "decisions": disconnected_op.get_pending_local_decisions(limit=limit),
+        "count": len(disconnected_op.get_pending_local_decisions(limit=limit))
+    }
+
+
+@app.post("/disconnected/sync")
+async def trigger_sync(
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"}))
+):
+    """Manually trigger sync of pending data"""
+    if not disconnected_op.is_online:
+        raise HTTPException(status_code=503, detail="System is offline, cannot sync")
+    
+    disconnected_op._trigger_sync()
+    return {
+        "message": "Sync triggered",
+        "pending_alerts": len(disconnected_op.get_pending_critical_alerts()),
+        "pending_decisions": len(disconnected_op.get_pending_local_decisions())
     }
 
 

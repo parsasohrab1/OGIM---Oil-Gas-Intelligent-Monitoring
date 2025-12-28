@@ -1,0 +1,232 @@
+.scada-page {
+  padding: 20px;
+}
+
+.scada-page h2 {
+  margin-bottom: 20px;
+  color: #333;
+}
+
+.scada-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 20px;
+}
+
+.scada-card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.scada-card h3 {
+  margin-top: 0;
+  color: #555;
+  border-bottom: 2px solid #eee;
+  padding-bottom: 10px;
+}
+
+.connections-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.connection-item {
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  border-left: 4px solid #007bff;
+}
+
+.connection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.connection-id {
+  font-weight: 600;
+  font-size: 16px;
+  color: #333;
+}
+
+.connection-status {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.connection-status.connected {
+  background: #d4edda;
+  color: #155724;
+}
+
+.connection-status.disconnected {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.connection-details {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.connection-details div {
+  margin: 5px 0;
+}
+
+.connection-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-connect,
+.btn-disconnect,
+.btn-select {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.btn-connect {
+  background: #28a745;
+  color: white;
+}
+
+.btn-disconnect {
+  background: #dc3545;
+  color: white;
+}
+
+.btn-select {
+  background: #007bff;
+  color: white;
+}
+
+.nodes-list {
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.node-item {
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  border-left: 3px solid #17a2b8;
+}
+
+.node-id {
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 5px;
+}
+
+.node-name {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 5px;
+}
+
+.node-value {
+  color: #007bff;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.node-type {
+  color: #999;
+  font-size: 12px;
+}
+
+.protocol-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.stat-item {
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stat-label {
+  color: #666;
+  font-size: 14px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #007bff;
+}
+
+.sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.sync-item {
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sync-label {
+  color: #666;
+  font-size: 14px;
+}
+
+.sync-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.sync-value.active {
+  color: #28a745;
+}
+
+.conversion-info {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.conversion-item {
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conv-source {
+  color: #333;
+  font-weight: 500;
+}
+
+.conv-status {
+  color: #28a745;
+  font-weight: 600;
+}
+

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import numpy as np
 
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
@@ -21,6 +22,14 @@ from shared.auth import require_roles
 from metrics import setup_metrics
 from tracing import setup_tracing
 from rul_model import rul_model_manager
+
+# Import advanced LSTM model
+try:
+    from advanced_lstm_model import AdvancedLSTMModel, get_well_model
+    ADVANCED_LSTM_AVAILABLE = True
+except ImportError:
+    ADVANCED_LSTM_AVAILABLE = False
+    logger.warning("Advanced LSTM model not available")
 
 try:
     from prometheus_client import Counter, Histogram
@@ -111,6 +120,29 @@ class TimeSeriesForecastResponse(BaseModel):
     sequence_length: int
     confidence: float
     timestamp: datetime
+    confidence_lower: Optional[List[float]] = None
+    confidence_upper: Optional[List[float]] = None
+    model_type: Optional[str] = None
+
+
+class TrainLSTMRequest(BaseModel):
+    well_name: str
+    time_series_data: List[float]
+    model_type: str = "stacked_lstm"  # stacked_lstm, bidirectional, attention
+    sequence_length: int = 60
+    forecast_horizon: int = 24
+    epochs: int = 100
+    batch_size: int = 32
+    validation_split: float = 0.2
+
+
+class TrainLSTMResponse(BaseModel):
+    well_name: str
+    model_type: str
+    training_status: str
+    metrics: Dict[str, float]
+    epochs_trained: int
+    message: str
 
 
 @app.on_event("startup")
@@ -255,10 +287,35 @@ async def forecast_time_series(request: TimeSeriesForecastRequest):
         start_time = time.perf_counter()
 
     try:
+        # Try advanced LSTM first
+        if ADVANCED_LSTM_AVAILABLE:
+            # Extract well name from sensor_id (assuming format: WELL-SENSOR)
+            well_name = request.sensor_id.split('-')[0] if '-' in request.sensor_id else "default"
+            model = get_well_model(well_name, model_type="stacked_lstm")
+            
+            if model.is_trained:
+                historical_array = np.array(request.historical_data)
+                result = model.predict(historical_array, forecast_steps=request.forecast_steps)
+                
+                logger.info(f"Advanced LSTM forecast completed for {request.sensor_id}")
+                
+                return TimeSeriesForecastResponse(
+                    sensor_id=request.sensor_id,
+                    predictions=result["predictions"],
+                    forecast_steps=result["forecast_steps"],
+                    sequence_length=result["sequence_length"],
+                    confidence=result["confidence"],
+                    timestamp=datetime.utcnow(),
+                    confidence_lower=result.get("confidence_lower"),
+                    confidence_upper=result.get("confidence_upper"),
+                    model_type=result.get("model_type")
+                )
+        
+        # Fallback to MLflow model
         if not (MLFLOW_AVAILABLE and mlflow_manager):
             raise HTTPException(
                 status_code=503,
-                detail="MLflow integration not available for time series forecasting"
+                detail="LSTM models not available. Please train a model first."
             )
 
         result = mlflow_manager.predict_time_series(
@@ -295,6 +352,103 @@ async def forecast_time_series(request: TimeSeriesForecastRequest):
         if METRICS_ENABLED and start_time is not None:
             duration = time.perf_counter() - start_time
             INFERENCE_LATENCY.labels("time_series_forecast").observe(duration)
+
+
+@app.post("/lstm/train", response_model=TrainLSTMResponse)
+async def train_lstm_model(
+    request: TrainLSTMRequest,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"}))
+):
+    """Train advanced LSTM model for a specific well"""
+    if not ADVANCED_LSTM_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Advanced LSTM models not available. TensorFlow is required."
+        )
+    
+    try:
+        # Get or create model for this well
+        model = get_well_model(request.well_name, model_type=request.model_type)
+        
+        # Prepare data
+        data_array = np.array(request.time_series_data).reshape(-1, 1)
+        
+        # Create sequences
+        X, y = [], []
+        seq_len = request.sequence_length
+        forecast_horizon = request.forecast_horizon
+        
+        for i in range(len(data_array) - seq_len - forecast_horizon + 1):
+            X.append(data_array[i:(i + seq_len)])
+            y.append(data_array[i + seq_len:i + seq_len + forecast_horizon])
+        
+        X = np.array(X)
+        y = np.array(y)
+        
+        if len(X) == 0:
+            raise ValueError(
+                f"Not enough data. Need at least {seq_len + forecast_horizon} points, "
+                f"got {len(data_array)}"
+            )
+        
+        # Update model parameters
+        model.sequence_length = seq_len
+        model.forecast_horizon = forecast_horizon
+        
+        # Train model
+        metrics = model.train(
+            X_train=X,
+            y_train=y,
+            epochs=request.epochs,
+            batch_size=request.batch_size,
+            validation_split=request.validation_split,
+            verbose=0
+        )
+        
+        logger.info(f"LSTM model trained for well {request.well_name}: {metrics}")
+        
+        return TrainLSTMResponse(
+            well_name=request.well_name,
+            model_type=request.model_type,
+            training_status="completed",
+            metrics=metrics,
+            epochs_trained=metrics.get("epochs_trained", request.epochs),
+            message=f"Model trained successfully for {request.well_name}"
+        )
+    except ValueError as e:
+        logger.warning(f"Invalid input for LSTM training: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"LSTM training error: {e}")
+        raise HTTPException(status_code=500, detail=f"Training error: {str(e)}")
+
+
+@app.get("/lstm/models")
+async def list_lstm_models(
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"}))
+):
+    """List all trained LSTM models"""
+    if not ADVANCED_LSTM_AVAILABLE:
+        return {"models": [], "message": "Advanced LSTM not available"}
+    
+    from advanced_lstm_model import _well_models
+    
+    models_info = []
+    for key, model in _well_models.items():
+        if model.is_trained:
+            well_name, model_type = key.rsplit("_", 1)
+            models_info.append({
+                "well_name": well_name,
+                "model_type": model_type,
+                "sequence_length": model.sequence_length,
+                "forecast_horizon": model.forecast_horizon,
+                "is_trained": model.is_trained
+            })
+    
+    return {
+        "models": models_info,
+        "count": len(models_info)
+    }
 
 
 @app.get("/models")

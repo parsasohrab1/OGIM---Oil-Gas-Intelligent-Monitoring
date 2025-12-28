@@ -1,5 +1,21 @@
 .alerts-page {
   width: 100%;
+  padding: 20px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.no-alerts {
+  text-align: center;
+  padding: 40px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  margin: 20px 0;
+  color: #666;
 }
 
 .alerts-list {
@@ -53,5 +69,60 @@
 
 .alert-body p {
   margin: 0.5rem 0;
+}
+
+.alert-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.alert-actions button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  background: #333;
+  color: white;
+}
+
+.alert-actions button:hover:not(:disabled) {
+  background: #444;
+  transform: translateY(-1px);
+}
+
+.alert-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.work-order-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.work-order-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+}
+
+.work-order-info {
+  background: rgba(102, 126, 234, 0.1);
+  border-left: 3px solid #667eea;
+  padding: 10px;
+  margin: 10px 0;
+  border-radius: 4px;
+}
+
+.work-order-info p {
+  margin: 0;
+  color: #667eea;
+  font-weight: 500;
 }
 

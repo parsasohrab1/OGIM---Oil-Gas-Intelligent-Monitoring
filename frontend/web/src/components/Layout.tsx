@@ -41,6 +41,54 @@ export default function Layout({ children }: LayoutProps) {
           >
             Reports
           </Link>
+          <Link 
+            to="/dvr" 
+            className={location.pathname === '/dvr' ? 'active' : ''}
+          >
+            DVR
+          </Link>
+          <Link 
+            to="/remote-operations" 
+            className={location.pathname === '/remote-operations' ? 'active' : ''}
+          >
+            Remote Ops
+          </Link>
+          <Link 
+            to="/data-variables" 
+            className={location.pathname === '/data-variables' ? 'active' : ''}
+          >
+            Data Variables
+          </Link>
+          <Link 
+            to="/maintenance" 
+            className={location.pathname === '/maintenance' ? 'active' : ''}
+          >
+            Maintenance
+          </Link>
+          <Link 
+            to="/scada" 
+            className={location.pathname === '/scada' ? 'active' : ''}
+          >
+            SCADA/PLC
+          </Link>
+          <Link 
+            to="/lstm-forecast" 
+            className={location.pathname === '/lstm-forecast' ? 'active' : ''}
+          >
+            LSTM Forecast
+          </Link>
+          <Link 
+            to="/storage-optimization" 
+            className={location.pathname === '/storage-optimization' ? 'active' : ''}
+          >
+            Storage
+          </Link>
+          <Link 
+            to="/well3d" 
+            className={location.pathname === '/well3d' ? 'active' : ''}
+          >
+            3D Visualization
+          </Link>
         </div>
       </nav>
       <main className="main-content">

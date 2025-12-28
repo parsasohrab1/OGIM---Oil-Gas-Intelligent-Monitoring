@@ -163,6 +163,206 @@ async def create_bim_model(
     return {"model_id": model.model_id, "status": "created"}
 
 
+@app.get("/well/{well_name}/3d")
+async def get_well_3d_data(
+    well_name: str,
+    db: Session = Depends(get_timescale_db),
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """
+    Get well data for 3D visualization with depth-based sensor readings
+    Returns data organized by depth segments for 3D rendering
+    """
+    from models import SensorData, Tag
+    import random
+    
+    # Get all tags for this well
+    tags = db.query(Tag).filter(Tag.well_name == well_name).all()
+    
+    if not tags:
+        # Return mock data if no tags found
+        total_depth = 3000  # meters
+        num_segments = 20
+        
+        depth_data = []
+        for i in range(num_segments):
+            depth = (i / num_segments) * total_depth
+            # Simulate pressure increase with depth
+            pressure = 1000 + (depth / total_depth) * 2000 + random.uniform(-50, 50)
+            # Simulate temperature increase with depth
+            temperature = 25 + (depth / total_depth) * 100 + random.uniform(-5, 5)
+            # Flow rate varies
+            flow_rate = 100 + random.uniform(-20, 30)
+            
+            # Determine status based on values
+            status = 'normal'
+            if pressure > 2800 or temperature > 110:
+                status = 'critical'
+            elif pressure > 2500 or temperature > 95:
+                status = 'warning'
+            
+            depth_data.append({
+                "depth": depth,
+                "pressure": round(pressure, 2),
+                "temperature": round(temperature, 1),
+                "flowRate": round(flow_rate, 2),
+                "status": status
+            })
+        
+        # Get surface data from latest sensor readings
+        surface_tags = [t for t in tags if 'wellhead' in t.equipment_type.lower() or 'surface' in t.equipment_type.lower()]
+        
+        wellhead_pressure = 500.0
+        wellhead_temperature = 30.0
+        flow_rate = 150.0
+        
+        if surface_tags:
+            for tag in surface_tags[:3]:  # Get first 3 surface sensors
+                latest = db.query(SensorData).filter(
+                    SensorData.tag_id == tag.tag_id
+                ).order_by(SensorData.timestamp.desc()).first()
+                
+                if latest:
+                    if 'pressure' in tag.sensor_type.lower():
+                        wellhead_pressure = latest.value
+                    elif 'temperature' in tag.sensor_type.lower():
+                        wellhead_temperature = latest.value
+                    elif 'flow' in tag.sensor_type.lower():
+                        flow_rate = latest.value
+        
+        return {
+            "wellName": well_name,
+            "totalDepth": total_depth,
+            "depthData": depth_data,
+            "surfaceData": {
+                "wellheadPressure": round(wellhead_pressure, 2),
+                "wellheadTemperature": round(wellhead_temperature, 1),
+                "flowRate": round(flow_rate, 2)
+            }
+        }
+    
+    # Calculate total depth from tags (assume max depth from location metadata)
+    total_depth = 3000  # Default, could be from well metadata
+    for tag in tags:
+        if tag.location:
+            # Try to extract depth from location
+            try:
+                if 'depth' in tag.location.lower():
+                    depth_str = tag.location.split('depth')[1].split()[0]
+                    depth_val = float(depth_str)
+                    total_depth = max(total_depth, depth_val)
+            except:
+                pass
+    
+    # Group sensors by depth ranges
+    num_segments = 20
+    segment_depth = total_depth / num_segments
+    
+    depth_data = []
+    for i in range(num_segments):
+        depth_start = i * segment_depth
+        depth_end = (i + 1) * segment_depth
+        depth_center = (depth_start + depth_end) / 2
+        
+        # Find sensors in this depth range
+        segment_tags = []
+        for tag in tags:
+            tag_depth = 0
+            if tag.location:
+                try:
+                    if 'depth' in tag.location.lower():
+                        depth_str = tag.location.split('depth')[1].split()[0]
+                        tag_depth = float(depth_str)
+                except:
+                    pass
+            
+            if depth_start <= tag_depth < depth_end:
+                segment_tags.append(tag)
+        
+        # Get average values for this segment
+        pressures = []
+        temperatures = []
+        flow_rates = []
+        
+        for tag in segment_tags:
+            latest = db.query(SensorData).filter(
+                SensorData.tag_id == tag.tag_id
+            ).order_by(SensorData.timestamp.desc()).first()
+            
+            if latest:
+                if 'pressure' in tag.sensor_type.lower():
+                    pressures.append(latest.value)
+                elif 'temperature' in tag.sensor_type.lower():
+                    temperatures.append(latest.value)
+                elif 'flow' in tag.sensor_type.lower():
+                    flow_rates.append(latest.value)
+        
+        # Calculate averages or use defaults
+        pressure = sum(pressures) / len(pressures) if pressures else 1000 + (depth_center / total_depth) * 2000
+        temperature = sum(temperatures) / len(temperatures) if temperatures else 25 + (depth_center / total_depth) * 100
+        flow_rate = sum(flow_rates) / len(flow_rates) if flow_rates else 100
+        
+        # Determine status
+        status = 'normal'
+        if pressure > 2800 or temperature > 110:
+            status = 'critical'
+        elif pressure > 2500 or temperature > 95:
+            status = 'warning'
+        
+        depth_data.append({
+            "depth": round(depth_center, 1),
+            "pressure": round(pressure, 2),
+            "temperature": round(temperature, 1),
+            "flowRate": round(flow_rate, 2),
+            "status": status
+        })
+    
+    # Get surface data
+    surface_tags = [t for t in tags if 'wellhead' in t.equipment_type.lower() or 'surface' in t.equipment_type.lower()]
+    
+    wellhead_pressure = 500.0
+    wellhead_temperature = 30.0
+    flow_rate = 150.0
+    
+    for tag in surface_tags[:3]:
+        latest = db.query(SensorData).filter(
+            SensorData.tag_id == tag.tag_id
+        ).order_by(SensorData.timestamp.desc()).first()
+        
+        if latest:
+            if 'pressure' in tag.sensor_type.lower():
+                wellhead_pressure = latest.value
+            elif 'temperature' in tag.sensor_type.lower():
+                wellhead_temperature = latest.value
+            elif 'flow' in tag.sensor_type.lower():
+                flow_rate = latest.value
+    
+    return {
+        "wellName": well_name,
+        "totalDepth": total_depth,
+        "depthData": depth_data,
+        "surfaceData": {
+            "wellheadPressure": round(wellhead_pressure, 2),
+            "wellheadTemperature": round(wellhead_temperature, 1),
+            "flowRate": round(flow_rate, 2)
+        }
+    }
+
+
+@app.get("/wells")
+async def get_wells_list(
+    db: Session = Depends(get_timescale_db),
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get list of all wells"""
+    from models import Tag
+    
+    wells = db.query(Tag.well_name).distinct().all()
+    well_list = [w[0] for w in wells] if wells else ['PROD-001', 'PROD-002', 'INJ-001', 'OBS-001']
+    
+    return {"wells": well_list}
+
+
 @app.get("/bim3d/scene/{well_name}")
 async def get_bim_scene(
     well_name: str,

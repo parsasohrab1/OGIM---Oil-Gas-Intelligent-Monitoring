@@ -5,6 +5,14 @@ import Dashboard from './pages/Dashboard'
 import Alerts from './pages/Alerts'
 import Wells from './pages/Wells'
 import Reports from './pages/Reports'
+import DVR from './pages/DVR'
+import RemoteOperations from './pages/RemoteOperations'
+import DataVariables from './pages/DataVariables'
+import Maintenance from './pages/Maintenance'
+import SCADA from './pages/SCADA'
+import LSTMForecast from './pages/LSTMForecast'
+import StorageOptimization from './pages/StorageOptimization'
+import Well3D from './pages/Well3D'
 import './App.css'
 
 const queryClient = new QueryClient()
@@ -12,13 +20,26 @@ const queryClient = new QueryClient()
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <Router>
+      <Router
+        future={{
+          v7_startTransition: true,
+          v7_relativeSplatPath: true,
+        }}
+      >
         <Layout>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/wells" element={<Wells />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/dvr" element={<DVR />} />
+            <Route path="/remote-operations" element={<RemoteOperations />} />
+            <Route path="/data-variables" element={<DataVariables />} />
+            <Route path="/maintenance" element={<Maintenance />} />
+            <Route path="/scada" element={<SCADA />} />
+            <Route path="/lstm-forecast" element={<LSTMForecast />} />
+            <Route path="/storage-optimization" element={<StorageOptimization />} />
+            <Route path="/well3d" element={<Well3D />} />
           </Routes>
         </Layout>
       </Router>

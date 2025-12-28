@@ -76,26 +76,20 @@ def create_hypertables():
             """))
             conn.commit()
             print("✓ Created optimized indexes")
-        except Exception as e:
-            print(f"⚠ Optimization warning: {e}")
-        
-        # Optimize for high-volume writes (10GB/day)
-        print("\nOptimizing hypertable for high-volume data ingestion...")
-        try:
-            # Set chunk interval to 1 day for 10GB/day
-            conn.execute(text("""
-                SELECT set_chunk_time_interval('sensor_data', INTERVAL '1 day');
-            """))
-            conn.commit()
-            print("✓ Set chunk interval to 1 day")
             
-            # Create additional indexes for better query performance
-            conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_sensor_data_tag_timestamp 
-                ON sensor_data (tag_id, timestamp DESC);
-            """))
-            conn.commit()
-            print("✓ Created optimized indexes")
+            # Enable compression
+            from .compression_manager import compression_manager
+            print("\nSetting up compression policy...")
+            if compression_manager.enable_compression('sensor_data', segmentby_column='tag_id'):
+                print("✓ Compression enabled")
+                
+                # Add compression policy (compress data older than 90 days)
+                if compression_manager.add_compression_policy('sensor_data', compress_after_days=90):
+                    print("✓ Compression policy added (compress chunks older than 90 days)")
+                else:
+                    print("⚠ Failed to add compression policy")
+            else:
+                print("⚠ Failed to enable compression")
         except Exception as e:
             print(f"⚠ Optimization warning: {e}")
 

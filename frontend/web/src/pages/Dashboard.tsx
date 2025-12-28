@@ -1,9 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { dataIngestionAPI, alertAPI } from '../api/services'
 import './Dashboard.css'
 
 export default function Dashboard() {
+  const queryClient = useQueryClient()
+  
   // Fetch sensor data from backend
   const { data: sensorData, isLoading } = useQuery({
     queryKey: ['sensor-data'],
@@ -19,9 +21,9 @@ export default function Dashboard() {
           temperature: record.sensor_type === 'temperature' ? record.value : null,
           flowRate: record.sensor_type === 'flow_rate' ? record.value : null,
         })) || []
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to fetch sensor data:', error)
-        // Fallback to mock data
+        // Fallback to mock data when backend is not available
         return Array.from({ length: 20 }, (_, i) => ({
           time: new Date(Date.now() - (20 - i) * 60000).toLocaleTimeString(),
           pressure: Math.random() * 100 + 300,
@@ -31,14 +33,58 @@ export default function Dashboard() {
       }
     },
     refetchInterval: 10000, // Refetch every 10 seconds
+    retry: 2, // Retry 2 times before giving up
+    retryDelay: 3000, // Wait 3 seconds between retries
   })
   
   // Fetch alerts
   const { data: alertsData } = useQuery({
     queryKey: ['alerts', 'open'],
-    queryFn: () => alertAPI.getAlerts({ status: 'open' }),
+    queryFn: async () => {
+      try {
+        return await alertAPI.getAlerts({ status: 'open' })
+      } catch (error: any) {
+        console.error('Failed to fetch alerts:', error)
+        // Return empty alerts when backend is not available
+        return { count: 0, alerts: [] }
+      }
+    },
     refetchInterval: 30000,
+    retry: 2,
+    retryDelay: 3000,
   })
+  
+  // Get critical alerts without work orders
+  const criticalAlerts = alertsData?.alerts?.filter(
+    (alert: any) => alert.severity === 'critical' && !alert.erp_work_order_id
+  ) || []
+  
+  // Create work order mutation
+  const createWorkOrderMutation = useMutation({
+    mutationFn: ({ alertId, erpType }: { alertId: string; erpType?: string }) =>
+      alertAPI.createWorkOrder(alertId, erpType || 'sap'),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['alerts'] })
+      alert(`✅ Work Order created: ${data.work_order_id}`)
+    },
+    onError: (error: any) => {
+      alert(`❌ Failed to create Work Order: ${error.response?.data?.detail || error.message}`)
+    },
+  })
+  
+  const handleCreateWorkOrderForCritical = () => {
+    if (criticalAlerts.length === 0) {
+      alert('No critical alerts without work orders found.')
+      return
+    }
+    
+    if (window.confirm(`Create Work Orders for ${criticalAlerts.length} critical alert(s)?`)) {
+      // Create work orders for all critical alerts
+      criticalAlerts.forEach((alert: any) => {
+        createWorkOrderMutation.mutate({ alertId: alert.alert_id })
+      })
+    }
+  }
 
   if (isLoading) {
     return <div className="loading">Loading dashboard...</div>
@@ -46,7 +92,19 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard">
-      <h2>Real-Time Monitoring Dashboard</h2>
+      <div className="dashboard-header">
+        <h2>Real-Time Monitoring Dashboard</h2>
+        {criticalAlerts.length > 0 && (
+          <button
+            onClick={handleCreateWorkOrderForCritical}
+            disabled={createWorkOrderMutation.isPending}
+            className="quick-action-btn work-order-quick-action"
+            title={`Create Work Orders for ${criticalAlerts.length} critical alert(s)`}
+          >
+            {createWorkOrderMutation.isPending ? 'Creating...' : `Create Work Orders (${criticalAlerts.length})`}
+          </button>
+        )}
+      </div>
       
       <div className="metrics-grid">
         <div className="metric-card">

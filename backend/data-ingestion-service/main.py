@@ -17,7 +17,7 @@ except ImportError:
         from datetime import datetime
         return datetime.fromisoformat(s.replace('Z', '+00:00'))
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
@@ -37,6 +37,8 @@ from offline_buffer import OfflineBufferManager
 from connection_monitor import ConnectionMonitor
 from edge_to_stream import edge_to_stream_bridge
 from sensor_health import sensor_health_monitor
+from mqtt_client import get_mqtt_client, MQTTMessageHandler
+from lorawan_client import get_lorawan_client
 from auth import require_authentication, require_roles
 from metrics import setup_metrics
 from tracing import setup_tracing
@@ -159,6 +161,7 @@ class ConnectorConfig(BaseModel):
 async def startup_event():
     """Initialize database and Kafka on startup"""
     global kafka_producer, opcua_client, offline_buffer, connection_monitor, retry_task
+    global mqtt_client, mqtt_handler, lorawan_client
     logger.info("Starting data ingestion service...")
     try:
         kafka_producer = KafkaProducerWrapper(KAFKA_TOPICS["RAW_SENSOR_DATA"])
@@ -224,6 +227,45 @@ async def startup_event():
             opcua_client = OPCUAClient()
             opcua_client.connect()
         
+        # Initialize MQTT client if enabled
+        if settings.MQTT_ENABLED:
+            try:
+                mqtt_client = get_mqtt_client(
+                    broker_host=settings.MQTT_BROKER_HOST,
+                    broker_port=settings.MQTT_BROKER_PORT,
+                    username=settings.MQTT_USERNAME,
+                    password=settings.MQTT_PASSWORD,
+                    qos=settings.MQTT_QOS
+                )
+                
+                if mqtt_client.connect():
+                    mqtt_handler = MQTTMessageHandler(mqtt_client)
+                    
+                    # Subscribe to configured topics
+                    topics = [t.strip() for t in settings.MQTT_TOPICS.split(",")]
+                    for topic in topics:
+                        mqtt_client.subscribe(topic, callback=mqtt_handler.handle_sensor_data)
+                    
+                    logger.info(f"MQTT client connected and subscribed to {len(topics)} topics")
+                else:
+                    logger.warning("Failed to connect to MQTT broker")
+            except Exception as e:
+                logger.error(f"Failed to initialize MQTT client: {e}")
+        
+        # Initialize LoRaWAN client if enabled
+        if settings.LORAWAN_ENABLED:
+            try:
+                lorawan_client = get_lorawan_client(
+                    network_type=settings.LORAWAN_NETWORK_TYPE,
+                    api_url=settings.LORAWAN_API_URL,
+                    api_key=settings.LORAWAN_API_KEY,
+                    app_id=settings.LORAWAN_APP_ID,
+                    webhook_url=settings.LORAWAN_WEBHOOK_URL
+                )
+                logger.info(f"LoRaWAN client initialized (network: {settings.LORAWAN_NETWORK_TYPE})")
+            except Exception as e:
+                logger.error(f"Failed to initialize LoRaWAN client: {e}")
+        
         # Start retry task
         if offline_buffer:
             retry_task = asyncio.create_task(retry_buffered_records_loop())
@@ -236,13 +278,18 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    global retry_task
+    global retry_task, mqtt_client
     if retry_task:
         retry_task.cancel()
         try:
             await retry_task
         except asyncio.CancelledError:
             pass
+    
+    # Disconnect MQTT client
+    if mqtt_client:
+        mqtt_client.disconnect()
+        logger.info("MQTT client disconnected")
     
     if connection_monitor:
         connection_monitor.stop_monitoring()
@@ -691,6 +738,17 @@ async def health(tsdb: Session = Depends(get_timescale_db)):
         health_data["buffer_stats"] = buffer_stats
         health_data["buffered_records"] = buffer_stats.get("total_records", 0)
     
+    # Add MQTT status
+    if mqtt_client:
+        mqtt_status = mqtt_client.get_status()
+        if mqtt_handler:
+            mqtt_status.update(mqtt_handler.get_stats())
+        health_data["mqtt"] = mqtt_status
+    
+    # Add LoRaWAN status
+    if lorawan_client:
+        health_data["lorawan"] = lorawan_client.get_stats()
+    
     return health_data
 
 
@@ -736,6 +794,149 @@ async def clear_buffer(
         "message": f"Cleared {deleted} records from buffer",
         "deleted_count": deleted
     }
+
+
+@app.post("/mqtt/ingest")
+async def ingest_mqtt_data(
+    topic: str,
+    payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """
+    Ingest data received from MQTT
+    This endpoint can be called by MQTT message handler
+    """
+    try:
+        # Process MQTT message
+        if mqtt_handler:
+            # Create a mock message object for handler
+            class MockMessage:
+                def __init__(self):
+                    self.qos = 1
+                    self.topic = topic
+            
+            mock_msg = MockMessage()
+            sensor_data = mqtt_handler.handle_sensor_data(topic, payload, mock_msg)
+        else:
+            # Fallback processing
+            sensor_data = {
+                "sensor_id": payload.get("sensor_id", topic.split("/")[1] if "/" in topic else "unknown"),
+                "value": payload.get("value"),
+                "timestamp": datetime.utcnow(),
+                "source": "mqtt",
+                "topic": topic
+            }
+        
+        if not sensor_data or "value" not in sensor_data:
+            raise HTTPException(status_code=400, detail="Invalid MQTT payload")
+        
+        # Create sensor data record
+        sensor_record = SensorDataModel(
+            timestamp=sensor_data.get("timestamp", datetime.utcnow()),
+            well_name=sensor_data.get("well_name", "unknown"),
+            equipment_type=sensor_data.get("equipment_type", "sensor"),
+            sensor_type=sensor_data.get("sensor_type", "unknown"),
+            value=sensor_data["value"],
+            unit=sensor_data.get("unit", ""),
+            sensor_id=sensor_data.get("sensor_id", "unknown"),
+            data_quality=sensor_data.get("data_quality", "good")
+        )
+        
+        # Ingest the record
+        ingest_request = IngestRequest(records=[sensor_record], source="mqtt")
+        response = await ingest_data(ingest_request, background_tasks, get_timescale_db(), get_db(), _)
+        
+        return {
+            "status": "success",
+            "message": "MQTT data ingested successfully",
+            "sensor_id": sensor_data.get("sensor_id"),
+            "topic": topic
+        }
+    except Exception as e:
+        logger.error(f"Error ingesting MQTT data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/lorawan/webhook")
+async def lorawan_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """
+    Webhook endpoint for LoRaWAN network servers (TTN, ChirpStack)
+    Receives uplink messages from LoRaWAN sensors
+    """
+    try:
+        if not lorawan_client:
+            raise HTTPException(status_code=503, detail="LoRaWAN client not initialized")
+        
+        # Get request data
+        uplink_data = await request.json()
+        
+        # Process uplink message
+        sensor_data = lorawan_client.handle_uplink(uplink_data)
+        
+        if not sensor_data:
+            raise HTTPException(status_code=400, detail="Failed to process LoRaWAN uplink")
+        
+        # Create sensor data record
+        sensor_record = SensorDataModel(
+            timestamp=sensor_data.get("timestamp", datetime.utcnow()),
+            well_name=sensor_data.get("well_name", "unknown"),
+            equipment_type=sensor_data.get("equipment_type", "lorawan_sensor"),
+            sensor_type=sensor_data.get("sensor_type", "unknown"),
+            value=sensor_data.get("value", 0.0),
+            unit=sensor_data.get("unit", ""),
+            sensor_id=sensor_data.get("sensor_id", sensor_data.get("device_id", "unknown")),
+            data_quality="good"
+        )
+        
+        # Ingest the record
+        ingest_request = IngestRequest(records=[sensor_record], source="lorawan")
+        tsdb = next(get_timescale_db())
+        meta_db = next(get_db())
+        response = await ingest_data(ingest_request, background_tasks, tsdb, meta_db, _)
+        
+        # Call registered callbacks
+        for callback in lorawan_client.message_callbacks:
+            try:
+                callback(sensor_data)
+            except Exception as e:
+                logger.error(f"Error in LoRaWAN callback: {e}")
+        
+        return {
+            "status": "success",
+            "message": "LoRaWAN data ingested successfully",
+            "device_id": sensor_data.get("device_id"),
+            "network_type": lorawan_client.network_type
+        }
+    except Exception as e:
+        logger.error(f"Error processing LoRaWAN webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/wireless/status")
+async def get_wireless_status(
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Get status of wireless protocol clients"""
+    status = {
+        "mqtt": None,
+        "lorawan": None
+    }
+    
+    if mqtt_client:
+        mqtt_status = mqtt_client.get_status()
+        if mqtt_handler:
+            mqtt_status.update(mqtt_handler.get_stats())
+        status["mqtt"] = mqtt_status
+    
+    if lorawan_client:
+        status["lorawan"] = lorawan_client.get_stats()
+    
+    return status
 
 
 if __name__ == "__main__":

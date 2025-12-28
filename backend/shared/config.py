@@ -83,6 +83,14 @@ class Settings(BaseSettings):
         default="1 day",  # Chunk interval for hypertables
         env="TIMESCALE_CHUNK_TIME_INTERVAL"
     )
+    TIMESCALE_COMPRESSION_AFTER_DAYS: int = Field(
+        default=90,  # Compress chunks older than 90 days
+        env="TIMESCALE_COMPRESSION_AFTER_DAYS"
+    )
+    TIMESCALE_RETENTION_DAYS: int = Field(
+        default=365,  # Retain data for 365 days
+        env="TIMESCALE_RETENTION_DAYS"
+    )
     TIMESCALE_NUMBER_PARTITIONS: int = Field(
         default=4,  # Number of partitions for distributed hypertables
         env="TIMESCALE_NUMBER_PARTITIONS"
@@ -158,6 +166,40 @@ class Settings(BaseSettings):
     COMMAND_CONTROL_SERVICE_URL: str = Field(default="http://command-control-service:8006", env="COMMAND_CONTROL_SERVICE_URL")
     TAG_CATALOG_SERVICE_URL: str = Field(default="http://tag-catalog-service:8007", env="TAG_CATALOG_SERVICE_URL")
     DIGITAL_TWIN_SERVICE_URL: str = Field(default="http://digital-twin-service:8008", env="DIGITAL_TWIN_SERVICE_URL")
+    DVR_SERVICE_URL: str = Field(default="http://dvr-service:8011", env="DVR_SERVICE_URL")
+    REMOTE_OPERATIONS_SERVICE_URL: str = Field(default="http://remote-operations-service:8012", env="REMOTE_OPERATIONS_SERVICE_URL")
+    DATA_VARIABLES_SERVICE_URL: str = Field(default="http://data-variables-service:8013", env="DATA_VARIABLES_SERVICE_URL")
+    STORAGE_OPTIMIZATION_SERVICE_URL: str = Field(default="http://storage-optimization-service:8014", env="STORAGE_OPTIMIZATION_SERVICE_URL")
+    
+    # Rate Limiting
+    RATE_LIMIT_ENABLED: bool = Field(default=True, env="RATE_LIMIT_ENABLED")
+    RATE_LIMIT_REDIS_URL: Optional[str] = Field(default=None, env="RATE_LIMIT_REDIS_URL")
+    RATE_LIMIT_STRATEGY: str = Field(default="sliding_window", env="RATE_LIMIT_STRATEGY")  # sliding_window or token_bucket
+    
+    # mTLS Configuration
+    MTLS_ENABLED: bool = Field(default=False, env="MTLS_ENABLED")
+    MTLS_CERT_DIR: Optional[str] = Field(default=None, env="MTLS_CERT_DIR")
+    MTLS_CA_CERT_PATH: Optional[str] = Field(default=None, env="MTLS_CA_CERT_PATH")
+    MTLS_CLIENT_CERT_PATH: Optional[str] = Field(default=None, env="MTLS_CLIENT_CERT_PATH")
+    MTLS_CLIENT_KEY_PATH: Optional[str] = Field(default=None, env="MTLS_CLIENT_KEY_PATH")
+    MTLS_VERIFY_SERVER: bool = Field(default=True, env="MTLS_VERIFY_SERVER")
+    
+    # MQTT Configuration
+    MQTT_ENABLED: bool = Field(default=False, env="MQTT_ENABLED")
+    MQTT_BROKER_HOST: str = Field(default="localhost", env="MQTT_BROKER_HOST")
+    MQTT_BROKER_PORT: int = Field(default=1883, env="MQTT_BROKER_PORT")
+    MQTT_USERNAME: Optional[str] = Field(default=None, env="MQTT_USERNAME")
+    MQTT_PASSWORD: Optional[str] = Field(default=None, env="MQTT_PASSWORD")
+    MQTT_QOS: int = Field(default=1, env="MQTT_QOS")  # 0, 1, or 2
+    MQTT_TOPICS: str = Field(default="sensors/+/data,sensors/+/status", env="MQTT_TOPICS")  # Comma-separated
+    
+    # LoRaWAN Configuration
+    LORAWAN_ENABLED: bool = Field(default=False, env="LORAWAN_ENABLED")
+    LORAWAN_NETWORK_TYPE: str = Field(default="ttn", env="LORAWAN_NETWORK_TYPE")  # "ttn" or "chirpstack"
+    LORAWAN_API_URL: Optional[str] = Field(default=None, env="LORAWAN_API_URL")
+    LORAWAN_API_KEY: Optional[str] = Field(default=None, env="LORAWAN_API_KEY")
+    LORAWAN_APP_ID: Optional[str] = Field(default=None, env="LORAWAN_APP_ID")
+    LORAWAN_WEBHOOK_URL: Optional[str] = Field(default=None, env="LORAWAN_WEBHOOK_URL")
     
     # Logging
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")

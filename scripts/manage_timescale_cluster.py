@@ -127,8 +127,8 @@ def optimize_for_high_volume():
                 timescaledb.compress_segmentby = 'tag_id'
             );
         """),
-        ("Setting compression policy (compress chunks older than 7 days)", """
-            SELECT add_compression_policy('sensor_data', INTERVAL '7 days');
+        ("Setting compression policy (compress chunks older than 90 days)", """
+            SELECT add_compression_policy('sensor_data', INTERVAL '90 days');
         """),
         ("Setting retention policy (drop chunks older than 1 year)", """
             SELECT add_retention_policy('sensor_data', INTERVAL '1 year');

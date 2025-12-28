@@ -48,6 +48,8 @@ class Tag(Base):
     location = Column(String(100), nullable=True)
     status = Column(String(20), default="active", index=True)
     last_calibration = Column(DateTime, nullable=True)
+    sampling_rate_ms = Column(Integer, default=1000)  # Sampling rate in milliseconds
+    data_category = Column(String(50), nullable=True)  # pressure, temperature, flow, etc.
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

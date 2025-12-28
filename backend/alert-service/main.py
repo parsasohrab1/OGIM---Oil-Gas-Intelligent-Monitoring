@@ -267,6 +267,67 @@ async def resolve_alert(
     return {"message": "Alert resolved", "alert_id": alert_id}
 
 
+@app.post("/alerts/{alert_id}/create-work-order")
+async def create_work_order_from_alert(
+    alert_id: str,
+    erp_type: str = "sap",
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_write)
+):
+    """Create work order from alert manually"""
+    alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    # Check if work order already exists
+    if alert.erp_work_order_id:
+        return {
+            "message": "Work order already exists for this alert",
+            "work_order_id": alert.erp_work_order_id,
+            "alert_id": alert_id
+        }
+    
+    try:
+        # Call ERP service to create work order
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.ERP_SERVICE_URL}/work-orders/auto-create",
+                params={"alert_id": alert_id, "erp_type": erp_type},
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                work_order_data = response.json()
+                # Update alert with work order ID
+                alert.erp_work_order_id = work_order_data.get("work_order_id")
+                db.commit()
+                
+                logger.info(f"Created work order {work_order_data.get('work_order_id')} for alert {alert_id}")
+                return {
+                    "message": "Work order created successfully",
+                    "work_order_id": work_order_data.get("work_order_id"),
+                    "erp_system": work_order_data.get("erp_system"),
+                    "status": work_order_data.get("status"),
+                    "alert_id": alert_id
+                }
+            else:
+                error_detail = response.text
+                logger.error(f"Failed to create work order: {error_detail}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to create work order: {error_detail}"
+                )
+    except httpx.TimeoutException:
+        logger.error("Timeout while creating work order")
+        raise HTTPException(status_code=504, detail="ERP service timeout")
+    except httpx.RequestError as e:
+        logger.error(f"Error connecting to ERP service: {e}")
+        raise HTTPException(status_code=503, detail=f"ERP service unavailable: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error creating work order: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create work order: {str(e)}")
+
+
 @app.post("/rules")
 async def create_rule(
     rule: AlertRuleCreate,
