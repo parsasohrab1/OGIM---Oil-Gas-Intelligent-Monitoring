@@ -72,6 +72,90 @@ interface Well3DData {
   wellheadEquipment?: WellheadEquipment
 }
 
+// Generate mock well data - moved outside component for reuse
+function generateMockWellData(wellName: string): Well3DData {
+  return {
+    wellName,
+    totalDepth: 3000,
+    depthData: Array.from({ length: 20 }, (_, i) => ({
+      depth: (i / 20) * 3000,
+      pressure: 1000 + (i / 20) * 2000 + Math.random() * 100,
+      temperature: 25 + (i / 20) * 100 + Math.random() * 10,
+      flowRate: 100 + Math.random() * 50,
+      status: Math.random() > 0.8 ? 'warning' : Math.random() > 0.95 ? 'critical' : 'normal'
+    })),
+    surfaceData: {
+      wellheadPressure: 500 + Math.random() * 100,
+      wellheadTemperature: 30 + Math.random() * 10,
+      flowRate: 150 + Math.random() * 50
+    },
+    bop: {
+      type: 'Annular BOP',
+      pressureRating: 10000,
+      stackHeight: 3.5,
+      status: 'open'
+    },
+    casings: [
+      {
+        depth: 200,
+        outerDiameter: 20,
+        innerDiameter: 18.5,
+        type: 'conductor',
+        cementThickness: 1.5
+      },
+      {
+        depth: 800,
+        outerDiameter: 13.375,
+        innerDiameter: 12.415,
+        type: 'surface',
+        cementThickness: 1.2
+      },
+      {
+        depth: 2000,
+        outerDiameter: 9.625,
+        innerDiameter: 8.681,
+        type: 'intermediate',
+        cementThickness: 1.0
+      },
+      {
+        depth: 3000,
+        outerDiameter: 7,
+        innerDiameter: 6.276,
+        type: 'production',
+        cementThickness: 0.8
+      }
+    ],
+    wellheadEquipment: {
+      christmasTree: {
+        height: 2.5,
+        width: 1.2,
+        status: 'open'
+      },
+      masterValve: {
+        position: 100,
+        status: 'open'
+      },
+      wingValve: {
+        position: 75,
+        status: 'open'
+      },
+      chokeValve: {
+        position: 50,
+        status: 'open'
+      },
+      pressureGauges: [
+        { name: 'Wellhead Pressure', value: 2500 + Math.random() * 500, unit: 'psi' },
+        { name: 'Tubing Pressure', value: 2300 + Math.random() * 400, unit: 'psi' },
+        { name: 'Casing Pressure', value: 500 + Math.random() * 200, unit: 'psi' }
+      ],
+      flowMeter: {
+        flowRate: 850 + Math.random() * 200,
+        unit: 'bbl/day'
+      }
+    }
+  }
+}
+
 // Wellhead Equipment Component - تجهیزات سر چاهی
 function WellheadEquipment({ equipment, wellName }: { equipment?: WellheadEquipment; wellName: string }) {
   const [hovered, setHovered] = useState<string | null>(null)
@@ -605,8 +689,8 @@ function MultipleWellsScene({ wellsData, wells }: { wellsData: Record<string, We
 
       {/* Render all wells */}
       {wells.map((wellName, index) => {
-        const wellData = wellsData[wellName]
-        if (!wellData) return null
+        // Use mock data if wellData is not available
+        const wellData = wellsData[wellName] || generateMockWellData(wellName)
 
         const row = Math.floor(index / 2)
         const col = index % 2
@@ -775,9 +859,8 @@ export default function Well3D() {
       for (const wellName of wells) {
         try {
           const data = await well3DAPI.getWellData(wellName)
-          if (data) {
-            wellsData[wellName] = data
-          }
+          // Use mock data if API returns null/undefined (network error)
+          wellsData[wellName] = data ?? generateMockWellData(wellName)
         } catch (error) {
           // Use mock data if API fails
           wellsData[wellName] = generateMockWellData(wellName)
@@ -788,89 +871,6 @@ export default function Well3D() {
     enabled: viewMode === 'multiple',
   })
 
-  // Generate mock well data
-  function generateMockWellData(wellName: string): Well3DData {
-    return {
-      wellName,
-      totalDepth: 3000,
-      depthData: Array.from({ length: 20 }, (_, i) => ({
-        depth: (i / 20) * 3000,
-        pressure: 1000 + (i / 20) * 2000 + Math.random() * 100,
-        temperature: 25 + (i / 20) * 100 + Math.random() * 10,
-        flowRate: 100 + Math.random() * 50,
-        status: Math.random() > 0.8 ? 'warning' : Math.random() > 0.95 ? 'critical' : 'normal'
-      })),
-      surfaceData: {
-        wellheadPressure: 500 + Math.random() * 100,
-        wellheadTemperature: 30 + Math.random() * 10,
-        flowRate: 150 + Math.random() * 50
-      },
-      bop: {
-        type: 'Annular BOP',
-        pressureRating: 10000,
-        stackHeight: 3.5,
-        status: 'open'
-      },
-      casings: [
-        {
-          depth: 200,
-          outerDiameter: 20,
-          innerDiameter: 18.5,
-          type: 'conductor',
-          cementThickness: 1.5
-        },
-        {
-          depth: 800,
-          outerDiameter: 13.375,
-          innerDiameter: 12.415,
-          type: 'surface',
-          cementThickness: 1.2
-        },
-        {
-          depth: 2000,
-          outerDiameter: 9.625,
-          innerDiameter: 8.681,
-          type: 'intermediate',
-          cementThickness: 1.0
-        },
-        {
-          depth: 3000,
-          outerDiameter: 7,
-          innerDiameter: 6.276,
-          type: 'production',
-          cementThickness: 0.8
-        }
-      ],
-      wellheadEquipment: {
-        christmasTree: {
-          height: 2.5,
-          width: 1.2,
-          status: 'open'
-        },
-        masterValve: {
-          position: 100,
-          status: 'open'
-        },
-        wingValve: {
-          position: 75,
-          status: 'open'
-        },
-        chokeValve: {
-          position: 50,
-          status: 'open'
-        },
-        pressureGauges: [
-          { name: 'Wellhead Pressure', value: 2500 + Math.random() * 500, unit: 'psi' },
-          { name: 'Tubing Pressure', value: 2300 + Math.random() * 400, unit: 'psi' },
-          { name: 'Casing Pressure', value: 500 + Math.random() * 200, unit: 'psi' }
-        ],
-        flowMeter: {
-          flowRate: 850 + Math.random() * 200,
-          unit: 'bbl/day'
-        }
-      }
-    }
-  }
 
   if (isLoading && viewMode === 'single') {
     return (

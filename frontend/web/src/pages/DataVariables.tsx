@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import apiClient from '../api/client'
+import { dataVariablesAPI } from '../api/services'
 import './DataVariables.css'
 
 interface DataVariable {
@@ -154,8 +154,8 @@ export default function DataVariables() {
     queryKey: ['data-variables'],
     queryFn: async () => {
       try {
-        const response = await apiClient.get('/api/data-variables')
-        return response.data as DataVariable[]
+        const data = await dataVariablesAPI.getVariables()
+        return (data || []) as DataVariable[]
       } catch (error) {
         if (import.meta.env.DEV) {
           console.debug('Data variables service unavailable')
@@ -172,10 +172,8 @@ export default function DataVariables() {
     queryFn: async () => {
       if (!selectedVariable) return []
       try {
-        const response = await apiClient.get(`/api/data-variables/${selectedVariable}/data`, {
-          params: { limit: 100 }
-        })
-        return response.data
+        const data = await dataVariablesAPI.getVariableData(selectedVariable, { limit: 100 })
+        return data || []
       } catch (error) {
         if (import.meta.env.DEV) {
           console.debug('Variable data service unavailable')

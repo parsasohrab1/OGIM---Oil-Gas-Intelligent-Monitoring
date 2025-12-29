@@ -291,16 +291,43 @@ export const remoteOpsAPI = {
 // Data Variables API
 export const dataVariablesAPI = {
   getVariables: async () => {
-    const response = await apiClient.get('/api/data-variables')
-    return response.data
+    try {
+      const response = await apiClient.get('/api/data-variables')
+      return response.data
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch') || error.isNetworkError) {
+        // Service is not available, return empty array
+        return []
+      }
+      throw error
+    }
   },
   getVariableData: async (variableName: string, params?: any) => {
-    const response = await apiClient.get(`/api/data-variables/${variableName}/data`, { params })
-    return response.data
+    try {
+      const response = await apiClient.get(`/api/data-variables/${variableName}/data`, { params })
+      return response.data
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch') || error.isNetworkError) {
+        // Service is not available, return empty data
+        return { data: [], timestamps: [] }
+      }
+      throw error
+    }
   },
   getVariablesByCategory: async (category: string) => {
-    const response = await apiClient.get(`/api/data-variables/category/${category}`)
-    return response.data
+    try {
+      const response = await apiClient.get(`/api/data-variables/category/${category}`)
+      return response.data
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch') || error.isNetworkError) {
+        // Service is not available, return empty array
+        return []
+      }
+      throw error
+    }
   }
 }
 

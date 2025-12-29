@@ -7,24 +7,57 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 if (typeof window !== 'undefined') {
   const originalConsoleError = console.error
   const originalConsoleWarn = console.warn
+  const originalConsoleLog = console.log
+  
+  // Intercept all console methods before they can log
+  const suppressNetworkError = (errorString: string, stackTrace: string = '') => {
+    const fullErrorString = (errorString + ' ' + stackTrace).toLowerCase()
+    return (
+      fullErrorString.includes('erremptyresponse') || 
+      fullErrorString.includes('errnetwork') || 
+      fullErrorString.includes('net::erremptyresponse') ||
+      fullErrorString.includes('get http://localhost:8000/api/digital-twin') ||
+      fullErrorString.includes('get http://localhost:8000/api/data-ingestion') ||
+      fullErrorString.includes('get http://localhost:8000/api/data-variables') ||
+      fullErrorString.includes('services.ts:382') ||
+      fullErrorString.includes('services.ts:396') ||
+      (fullErrorString.includes('services.ts:') && (fullErrorString.includes('erremptyresponse') || fullErrorString.includes('net::erremptyresponse'))) ||
+      (fullErrorString.includes('getwells') && fullErrorString.includes('erremptyresponse')) ||
+      (fullErrorString.includes('getwelldata') && fullErrorString.includes('erremptyresponse')) ||
+      (fullErrorString.includes('dispatchxhrrequest') && fullErrorString.includes('erremptyresponse')) ||
+      (fullErrorString.includes('xhr') && fullErrorString.includes('erremptyresponse')) ||
+      (fullErrorString.includes('axios.js') && fullErrorString.includes('erremptyresponse'))
+    )
+  }
   
   // Also catch unhandled promise rejections for network errors
   window.addEventListener('unhandledrejection', (event) => {
     const error = event.reason
     const errorString = error?.toString() || error?.message || JSON.stringify(error) || ''
     const stackTrace = error?.stack || ''
-    const fullErrorString = errorString + ' ' + stackTrace
     
-    // Suppress network-related promise rejections
-    if (fullErrorString.includes('ERR_EMPTY_RESPONSE') || 
-        fullErrorString.includes('ERR_NETWORK') || 
-        fullErrorString.includes('net::ERR_EMPTY_RESPONSE') ||
-        fullErrorString.includes('GET http://localhost:8000/api/digital-twin') ||
-        fullErrorString.includes('GET http://localhost:8000/api/data-ingestion')) {
+    if (suppressNetworkError(errorString, stackTrace)) {
       event.preventDefault() // Prevent default error handling
       return
     }
   })
+  
+  // Override console.log to filter network errors (axios sometimes uses console.log)
+  console.log = (...args: any[]) => {
+    const errorString = args.map(arg => {
+      if (typeof arg === 'string') return arg
+      if (arg?.toString) return arg.toString()
+      if (arg?.stack) return arg.stack
+      return JSON.stringify(arg)
+    }).join(' ')
+    
+    const stackTrace = args.find(arg => arg?.stack)?.stack || ''
+    
+    if (suppressNetworkError(errorString, stackTrace)) {
+      return
+    }
+    originalConsoleLog.apply(console, args)
+  }
   
   // Override console.error to filter network errors
   console.error = (...args: any[]) => {
@@ -43,22 +76,12 @@ if (typeof window !== 'undefined') {
     
     // Get stack trace from Error object if available
     const stackTrace = args.find(arg => arg?.stack)?.stack || ''
-    const fullErrorString = errorString + ' ' + stackTrace
+    // Also check if any argument is an Error object with stack
+    const errorStack = args.find(arg => arg instanceof Error)?.stack || ''
+    const fullErrorString = errorString + ' ' + stackTrace + ' ' + errorStack
     
-    // Suppress network-related errors
-    // Check for various patterns of network errors
-    const isNetworkError = 
-      fullErrorString.includes('ERR_EMPTY_RESPONSE') || 
-      fullErrorString.includes('ERR_NETWORK') || 
-      fullErrorString.includes('net::ERR_EMPTY_RESPONSE') ||
-      fullErrorString.includes('GET http://localhost:8000/api/digital-twin') ||
-      fullErrorString.includes('GET http://localhost:8000/api/data-ingestion') ||
-      (fullErrorString.includes('services.ts:') && (fullErrorString.includes('ERR_EMPTY_RESPONSE') || fullErrorString.includes('net::ERR_EMPTY_RESPONSE') || fullErrorString.includes('GET http://localhost:8000'))) ||
-      (fullErrorString.includes('dispatchXhrRequest') && (fullErrorString.includes('ERR_EMPTY_RESPONSE') || fullErrorString.includes('net::ERR_EMPTY_RESPONSE'))) ||
-      (fullErrorString.includes('xhr') && (fullErrorString.includes('ERR_EMPTY_RESPONSE') || fullErrorString.includes('net::ERR_EMPTY_RESPONSE'))) ||
-      (fullErrorString.includes('axios.js') && (fullErrorString.includes('ERR_EMPTY_RESPONSE') || fullErrorString.includes('net::ERR_EMPTY_RESPONSE')))
-    
-    if (isNetworkError) {
+    // Suppress network-related errors using the shared function
+    if (suppressNetworkError(errorString, fullErrorString)) {
       // Silently ignore network errors - services may not be running
       return
     }
@@ -79,10 +102,10 @@ if (typeof window !== 'undefined') {
       }
     }).join(' ')
     
-    // Suppress network-related warnings
-    if (errorString.includes('ERR_EMPTY_RESPONSE') || 
-        errorString.includes('ERR_NETWORK') || 
-        errorString.includes('net::ERR_EMPTY_RESPONSE')) {
+    const stackTrace = args.find(arg => arg?.stack)?.stack || ''
+    
+    // Suppress network-related warnings using the shared function
+    if (suppressNetworkError(errorString, stackTrace)) {
       return
     }
     originalConsoleWarn.apply(console, args)
