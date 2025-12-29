@@ -4,30 +4,62 @@ import axios, { AxiosInstance, AxiosError } from 'axios'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 // Suppress console errors for network issues (ERR_EMPTY_RESPONSE, ERR_NETWORK)
+// This must run BEFORE any other code to catch all errors
 if (typeof window !== 'undefined') {
-  const originalConsoleError = console.error
-  const originalConsoleWarn = console.warn
-  const originalConsoleLog = console.log
+  // Store original console methods immediately
+  const originalConsoleError = console.error.bind(console)
+  const originalConsoleWarn = console.warn.bind(console)
+  const originalConsoleLog = console.log.bind(console)
   
   // Intercept all console methods before they can log
   const suppressNetworkError = (errorString: string, stackTrace: string = '') => {
     const fullErrorString = (errorString + ' ' + stackTrace).toLowerCase()
-    return (
-      fullErrorString.includes('erremptyresponse') || 
+    // More aggressive pattern matching - check for any combination of network error indicators
+    const hasNetworkError = fullErrorString.includes('erremptyresponse') || 
       fullErrorString.includes('errnetwork') || 
-      fullErrorString.includes('net::erremptyresponse') ||
+      fullErrorString.includes('net::erremptyresponse')
+    
+    const hasDigitalTwinEndpoint = fullErrorString.includes('digital-twin')
+    const hasServicesTs = fullErrorString.includes('services.ts:382') || 
+      fullErrorString.includes('services.ts:396') ||
+      (fullErrorString.includes('services.ts:') && hasNetworkError)
+    const hasWell3D = fullErrorString.includes('well3d.tsx:831') ||
+      fullErrorString.includes('well3d.tsx:850') ||
+      fullErrorString.includes('well3d.tsx:861') ||
+      (fullErrorString.includes('well3d.tsx:') && hasNetworkError)
+    const hasAxiosPatterns = fullErrorString.includes('dispatchxhrrequest') ||
+      fullErrorString.includes('xhr') ||
+      fullErrorString.includes('axios.js')
+    const hasQueryPatterns = fullErrorString.includes('queryfn') ||
+      fullErrorString.includes('fetchfn') ||
+      fullErrorString.includes('getwells') ||
+      fullErrorString.includes('getwelldata')
+    
+    // Suppress if it's a network error AND matches any of our known patterns
+    if (hasNetworkError && (
+      hasDigitalTwinEndpoint ||
+      hasServicesTs ||
+      hasWell3D ||
+      hasAxiosPatterns ||
+      hasQueryPatterns ||
       fullErrorString.includes('get http://localhost:8000/api/digital-twin') ||
       fullErrorString.includes('get http://localhost:8000/api/data-ingestion') ||
       fullErrorString.includes('get http://localhost:8000/api/data-variables') ||
-      fullErrorString.includes('services.ts:382') ||
-      fullErrorString.includes('services.ts:396') ||
-      (fullErrorString.includes('services.ts:') && (fullErrorString.includes('erremptyresponse') || fullErrorString.includes('net::erremptyresponse'))) ||
-      (fullErrorString.includes('getwells') && fullErrorString.includes('erremptyresponse')) ||
-      (fullErrorString.includes('getwelldata') && fullErrorString.includes('erremptyresponse')) ||
-      (fullErrorString.includes('dispatchxhrrequest') && fullErrorString.includes('erremptyresponse')) ||
-      (fullErrorString.includes('xhr') && fullErrorString.includes('erremptyresponse')) ||
-      (fullErrorString.includes('axios.js') && fullErrorString.includes('erremptyresponse'))
-    )
+      fullErrorString.includes('localhost:8000')
+    )) {
+      return true
+    }
+    
+    // Also suppress if it has services.ts or well3d.tsx line numbers with localhost:8000
+    if ((hasServicesTs || hasWell3D) && (
+      fullErrorString.includes('localhost:8000') ||
+      fullErrorString.includes('digital-twin') ||
+      hasAxiosPatterns
+    )) {
+      return true
+    }
+    
+    return false
   }
   
   // Also catch unhandled promise rejections for network errors
@@ -61,27 +93,41 @@ if (typeof window !== 'undefined') {
   
   // Override console.error to filter network errors
   console.error = (...args: any[]) => {
-    // Check all arguments and stack trace for network-related error messages
-    const errorString = args.map(arg => {
-      if (typeof arg === 'string') return arg
-      if (arg?.toString) return arg.toString()
-      if (arg?.stack) return arg.stack
-      if (arg?.message) return arg.message
-      try {
-        return JSON.stringify(arg)
-      } catch {
-        return String(arg)
-      }
-    }).join(' ')
+    // Build comprehensive error string from all arguments
+    const errorParts: string[] = []
     
-    // Get stack trace from Error object if available
-    const stackTrace = args.find(arg => arg?.stack)?.stack || ''
-    // Also check if any argument is an Error object with stack
-    const errorStack = args.find(arg => arg instanceof Error)?.stack || ''
-    const fullErrorString = errorString + ' ' + stackTrace + ' ' + errorStack
+    args.forEach(arg => {
+      if (typeof arg === 'string') {
+        errorParts.push(arg)
+      } else if (arg?.toString) {
+        errorParts.push(arg.toString())
+      }
+      if (arg?.stack) {
+        errorParts.push(arg.stack)
+      }
+      if (arg?.message) {
+        errorParts.push(arg.message)
+      }
+      if (arg?.code) {
+        errorParts.push(`code:${arg.code}`)
+      }
+      if (arg instanceof Error) {
+        errorParts.push(arg.stack || arg.message || arg.toString())
+      }
+      try {
+        const jsonStr = JSON.stringify(arg)
+        if (jsonStr && jsonStr !== '{}' && jsonStr !== '[]') {
+          errorParts.push(jsonStr)
+        }
+      } catch {
+        // Ignore JSON stringify errors
+      }
+    })
+    
+    const fullErrorString = errorParts.join(' ').toLowerCase()
     
     // Suppress network-related errors using the shared function
-    if (suppressNetworkError(errorString, fullErrorString)) {
+    if (suppressNetworkError(fullErrorString, fullErrorString)) {
       // Silently ignore network errors - services may not be running
       return
     }
