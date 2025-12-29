@@ -105,6 +105,12 @@ Start-Sleep -Seconds 2
 Write-Host "Starting Data Variables Service on port 8013..." -ForegroundColor Green
 Start-Process python -ArgumentList "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8013", "--reload" -WorkingDirectory "backend/data-variables-service" -WindowStyle Minimized
 
+Start-Sleep -Seconds 2
+
+# Start Storage Optimization Service
+Write-Host "Starting Storage Optimization Service on port 8014..." -ForegroundColor Green
+Start-Process python -ArgumentList "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8014", "--reload" -WorkingDirectory "backend/storage-optimization-service" -WindowStyle Minimized
+
 Write-Host ""
 Write-Host "Waiting for services to start..." -ForegroundColor Yellow
 Start-Sleep -Seconds 10
@@ -125,7 +131,7 @@ Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host "Dashboard URLs:" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "Frontend: http://localhost:3000" -ForegroundColor Green
+Write-Host "Frontend: http://localhost:5173" -ForegroundColor Green
 Write-Host "API Gateway: http://localhost:8000" -ForegroundColor Green
 Write-Host "API Docs: http://localhost:8000/docs" -ForegroundColor Green
 Write-Host ""
