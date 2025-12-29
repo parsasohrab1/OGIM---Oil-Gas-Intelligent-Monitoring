@@ -1,6 +1,7 @@
 """
 Offline Buffer Manager for Data Ingestion Resilience
 Handles data buffering when network connection is unavailable
+Supports both SQLite (legacy) and DuckDB (time-series optimized) storage
 """
 import json
 import logging
@@ -13,12 +14,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import contextmanager
 
+from .duckdb_storage import DuckDBTimeSeriesStorage, DUCKDB_AVAILABLE
+
 logger = logging.getLogger(__name__)
 
 
 class OfflineBufferManager:
     """
     Manages offline data buffering using SQLite for persistence
+    Optionally uses DuckDB for time-series data for faster recovery
     """
     
     def __init__(
@@ -27,6 +31,7 @@ class OfflineBufferManager:
         max_buffer_size: int = 100000,  # Maximum number of records
         max_buffer_size_mb: int = 500,  # Maximum buffer size in MB
         cleanup_interval: int = 3600,  # Cleanup interval in seconds
+        use_duckdb: bool = True,  # Use DuckDB for time-series data
     ):
         self.buffer_path = Path(buffer_path)
         self.buffer_path.mkdir(parents=True, exist_ok=True)
@@ -34,17 +39,32 @@ class OfflineBufferManager:
         self.max_buffer_size = max_buffer_size
         self.max_buffer_size_mb = max_buffer_size_mb
         self.cleanup_interval = cleanup_interval
+        self.use_duckdb = use_duckdb and DUCKDB_AVAILABLE
         self.lock = threading.RLock()
         
-        # Initialize database
+        # Initialize SQLite database (for metadata and non-time-series data)
         self._init_database()
+        
+        # Initialize DuckDB for time-series data if available
+        self.duckdb_storage = None
+        if self.use_duckdb:
+            try:
+                self.duckdb_storage = DuckDBTimeSeriesStorage(
+                    db_path=str(self.buffer_path / "timeseries.duckdb"),
+                    max_size_mb=max_buffer_size_mb,
+                    enable_compression=True
+                )
+                logger.info("DuckDB time-series storage enabled for faster data recovery")
+            except Exception as e:
+                logger.warning(f"Failed to initialize DuckDB, falling back to SQLite: {e}")
+                self.use_duckdb = False
         
         # Start cleanup thread
         self._cleanup_thread = None
         self._running = True
         self._start_cleanup_thread()
         
-        logger.info(f"OfflineBufferManager initialized at {self.db_path}")
+        logger.info(f"OfflineBufferManager initialized at {self.db_path} (DuckDB: {self.use_duckdb})")
     
     def _init_database(self):
         """Initialize SQLite database for buffering"""
@@ -101,6 +121,7 @@ class OfflineBufferManager:
     ) -> bool:
         """
         Add a record to the buffer
+        If DuckDB is enabled and data contains time-series metrics, stores in DuckDB for faster recovery
         
         Returns:
             True if added successfully, False if buffer is full
@@ -113,6 +134,96 @@ class OfflineBufferManager:
             logger.warning("Buffer is full, cannot add more records")
             return False
         
+        # If DuckDB is enabled and data looks like time-series data, use DuckDB
+        if self.use_duckdb and self._is_time_series_data(data):
+            return self._add_time_series_record(record_id, source, data, timestamp)
+        
+        # Otherwise use SQLite
+        return self._add_to_sqlite(record_id, source, data, timestamp)
+    
+    def _is_time_series_data(self, data: Dict[str, Any]) -> bool:
+        """Check if data looks like time-series sensor data"""
+        # Check for common time-series fields
+        time_series_indicators = [
+            'sensor_id', 'metric_name', 'value', 'pressure', 'temperature',
+            'flow_rate', 'flowRate', 'timestamp', 'well_name'
+        ]
+        return any(key in data for key in time_series_indicators)
+    
+    def _add_time_series_record(
+        self,
+        record_id: str,
+        source: str,
+        data: Dict[str, Any],
+        timestamp: float
+    ) -> bool:
+        """Add time-series record to DuckDB for faster recovery"""
+        if not self.duckdb_storage:
+            return self._add_to_sqlite(record_id, source, data, timestamp)
+        
+        try:
+            # Extract sensor_id and metric_name from data
+            sensor_id = data.get('sensor_id') or data.get('well_name') or source
+            metric_name = data.get('metric_name') or data.get('metric') or 'unknown'
+            
+            # Extract value (could be nested)
+            value = data.get('value')
+            if value is None:
+                # Try common metric names
+                for key in ['pressure', 'temperature', 'flow_rate', 'flowRate']:
+                    if key in data:
+                        value = data[key]
+                        metric_name = key
+                        break
+            
+            if value is None:
+                # Fallback to SQLite if we can't extract time-series data
+                return self._add_to_sqlite(record_id, source, data, timestamp)
+            
+            # Store in DuckDB
+            success = self.duckdb_storage.insert_data_point(
+                sensor_id=str(sensor_id),
+                metric_name=str(metric_name),
+                value=float(value),
+                timestamp=timestamp,
+                quality=data.get('quality', 100),
+                metadata={'record_id': record_id, 'source': source, 'original_data': data}
+            )
+            
+            # Also store metadata in SQLite for record tracking
+            if success:
+                try:
+                    with self._get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO buffered_records
+                            (record_id, source, data, timestamp, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, (
+                            record_id,
+                            source,
+                            json.dumps({'storage': 'duckdb', 'sensor_id': sensor_id, 'metric': metric_name}, default=str),
+                            timestamp,
+                            time.time()
+                        ))
+                        conn.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to store metadata in SQLite: {e}")
+            
+            return success
+        except Exception as e:
+            logger.error(f"Failed to add time-series record to DuckDB: {e}")
+            # Fallback to SQLite
+            return self._add_to_sqlite(record_id, source, data, timestamp)
+    
+    def _add_to_sqlite(
+        self,
+        record_id: str,
+        source: str,
+        data: Dict[str, Any],
+        timestamp: float
+    ) -> bool:
+        """Fallback method to add record to SQLite"""
         with self.lock:
             try:
                 with self._get_connection() as conn:
@@ -261,15 +372,15 @@ class OfflineBufferManager:
                 return False
     
     def get_buffer_stats(self) -> Dict[str, Any]:
-        """Get buffer statistics"""
+        """Get buffer statistics including DuckDB stats if available"""
         with self.lock:
             try:
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
                     
-                    # Total records
+                    # Total records in SQLite
                     cursor.execute("SELECT COUNT(*) as count FROM buffered_records")
-                    total = cursor.fetchone()["count"]
+                    total_sqlite = cursor.fetchone()["count"]
                     
                     # By source
                     cursor.execute("""
@@ -298,16 +409,28 @@ class OfflineBufferManager:
                     # Buffer size
                     db_size = self.db_path.stat().st_size / (1024 * 1024)  # MB
                     
-                    return {
-                        "total_records": total,
+                    stats = {
+                        "total_records": total_sqlite,
                         "by_source": by_source,
                         "by_retry_count": by_retry,
                         "oldest_record_age_seconds": time.time() - oldest if oldest else None,
                         "buffer_size_mb": round(db_size, 2),
                         "max_buffer_size": self.max_buffer_size,
                         "max_buffer_size_mb": self.max_buffer_size_mb,
-                        "buffer_usage_percent": round((total / self.max_buffer_size) * 100, 2) if self.max_buffer_size > 0 else 0
+                        "buffer_usage_percent": round((total_sqlite / self.max_buffer_size) * 100, 2) if self.max_buffer_size > 0 else 0,
+                        "duckdb_enabled": self.use_duckdb
                     }
+                    
+                    # Add DuckDB stats if available
+                    if self.use_duckdb and self.duckdb_storage:
+                        try:
+                            duckdb_stats = self.duckdb_storage.get_storage_stats()
+                            stats["duckdb"] = duckdb_stats
+                            stats["total_records"] = total_sqlite + duckdb_stats.get("total_records", 0)
+                        except Exception as e:
+                            logger.warning(f"Failed to get DuckDB stats: {e}")
+                    
+                    return stats
             except Exception as e:
                 logger.error(f"Failed to get buffer stats: {e}")
                 return {}
