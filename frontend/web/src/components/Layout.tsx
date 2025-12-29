@@ -63,7 +63,7 @@ export default function Layout({ children }: LayoutProps) {
             to="/maintenance" 
             className={location.pathname === '/maintenance' ? 'active' : ''}
           >
-            Maintenance
+            PDM
           </Link>
           <Link 
             to="/scada" 
@@ -88,6 +88,30 @@ export default function Layout({ children }: LayoutProps) {
             className={location.pathname === '/well3d' ? 'active' : ''}
           >
             3D Visualization
+          </Link>
+          <Link 
+            to="/edge-computing" 
+            className={location.pathname === '/edge-computing' ? 'active' : ''}
+          >
+            Edge Computing
+          </Link>
+          <Link 
+            to="/federated-learning" 
+            className={location.pathname === '/federated-learning' ? 'active' : ''}
+          >
+            Federated Learning
+          </Link>
+          <Link 
+            to="/ar-integration" 
+            className={location.pathname === '/ar-integration' ? 'active' : ''}
+          >
+            AR Integration
+          </Link>
+          <Link 
+            to="/blockchain-audit" 
+            className={location.pathname === '/blockchain-audit' ? 'active' : ''}
+          >
+            Blockchain Audit
           </Link>
         </div>
       </nav>

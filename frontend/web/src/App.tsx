@@ -13,6 +13,10 @@ import SCADA from './pages/SCADA'
 import LSTMForecast from './pages/LSTMForecast'
 import StorageOptimization from './pages/StorageOptimization'
 import Well3D from './pages/Well3D'
+import EdgeComputing from './pages/EdgeComputing'
+import FederatedLearning from './pages/FederatedLearning'
+import ARIntegration from './pages/ARIntegration'
+import BlockchainAudit from './pages/BlockchainAudit'
 import './App.css'
 
 const queryClient = new QueryClient()
@@ -40,6 +44,10 @@ function App() {
             <Route path="/lstm-forecast" element={<LSTMForecast />} />
             <Route path="/storage-optimization" element={<StorageOptimization />} />
             <Route path="/well3d" element={<Well3D />} />
+            <Route path="/edge-computing" element={<EdgeComputing />} />
+            <Route path="/federated-learning" element={<FederatedLearning />} />
+            <Route path="/ar-integration" element={<ARIntegration />} />
+            <Route path="/blockchain-audit" element={<BlockchainAudit />} />
           </Routes>
         </Layout>
       </Router>

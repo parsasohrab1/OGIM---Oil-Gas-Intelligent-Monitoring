@@ -39,7 +39,9 @@ export default function StorageOptimization() {
         const response = await apiClient.get('/api/storage-optimization/storage/stats')
         return response.data
       } catch (error: any) {
-        console.error('Failed to fetch storage stats:', error)
+        if (import.meta.env.DEV) {
+          console.debug('Storage service unavailable')
+        }
         return { hypertables: [], summary: { total_hypertables: 0, total_chunks: 0, compressed_chunks: 0, compression_rate: 0 } }
       }
     },
@@ -54,7 +56,9 @@ export default function StorageOptimization() {
         const response = await apiClient.get(`/api/storage-optimization/compression/status/${selectedTable}`)
         return response.data as CompressionStatus
       } catch (error: any) {
-        console.error('Failed to fetch compression status:', error)
+        if (import.meta.env.DEV) {
+          console.debug('Compression status service unavailable')
+        }
         return null
       }
     },
@@ -72,7 +76,9 @@ export default function StorageOptimization() {
         })
         return response.data
       } catch (error: any) {
-        console.error('Failed to fetch chunks:', error)
+        if (import.meta.env.DEV) {
+          console.debug('Chunks service unavailable')
+        }
         return { chunks: [], total: 0 }
       }
     },

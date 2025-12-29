@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart } from 'recharts'
+import { Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart } from 'recharts'
 import { mlAPI } from '../api/services'
 import './LSTMForecast.css'
 
@@ -33,7 +33,9 @@ export default function LSTMForecast() {
         const response = await mlAPI.getLSTMModels()
         return response.data
       } catch (error: any) {
-        console.error('Failed to fetch models:', error)
+        if (import.meta.env.DEV) {
+          console.debug('LSTM models service unavailable')
+        }
         return { models: [], count: 0 }
       }
     },

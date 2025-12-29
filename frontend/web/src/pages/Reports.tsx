@@ -34,7 +34,9 @@ export default function Reports() {
       try {
         return await reportingAPI.getReports()
       } catch (error: any) {
-        console.error('Failed to fetch reports:', error)
+        if (import.meta.env.DEV) {
+          console.debug('Reports service unavailable')
+        }
         // Return mock data when backend is not available
         return {
           count: 3,
@@ -107,7 +109,9 @@ export default function Reports() {
       setEndDate('')
     },
     onError: (error: any) => {
-      console.error('Failed to generate report:', error)
+      if (import.meta.env.DEV) {
+        console.debug('Report generation failed')
+      }
       alert('Failed to generate report. Using mock data.')
     }
   })

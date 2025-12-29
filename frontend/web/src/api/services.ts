@@ -27,8 +27,17 @@ export const authAPI = {
 // Data Ingestion API
 export const dataIngestionAPI = {
   getSensorData: async (params?: { limit?: number; well_name?: string }) => {
-    const response = await apiClient.get('/api/data-ingestion/sensor-data', { params })
-    return response.data
+    try {
+      const response = await apiClient.get('/api/data-ingestion/sensor-data', { params })
+      return response.data
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch')) {
+        // Service is not available, return empty result
+        return { records: [] }
+      }
+      throw error
+    }
   },
   
   getConnectors: async () => {
@@ -40,8 +49,17 @@ export const dataIngestionAPI = {
 // Alert API
 export const alertAPI = {
   getAlerts: async (params?: { well_name?: string; status?: string; severity?: string }) => {
-    const response = await apiClient.get('/api/alert/alerts', { params })
-    return response.data
+    try {
+      const response = await apiClient.get('/api/alert/alerts', { params })
+      return response.data
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch')) {
+        // Service is not available, return empty result
+        return { count: 0, alerts: [] }
+      }
+      throw error
+    }
   },
   
   acknowledgeAlert: async (alertId: string, acknowledgedBy: string) => {
@@ -336,8 +354,13 @@ export const well3DAPI = {
     try {
       const response = await apiClient.get(`/api/digital-twin/well/${wellName}/3d`)
       return response.data
-    } catch (error) {
-      // Return mock data if API fails
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch') || error.isNetworkError) {
+        // Service is not available, return null to use mock data
+        return null
+      }
+      // For other errors, also return null
       return null
     }
   },
@@ -345,8 +368,14 @@ export const well3DAPI = {
     try {
       const response = await apiClient.get('/api/digital-twin/wells')
       return response.data
-    } catch (error) {
-      return ['PROD-001', 'PROD-002', 'INJ-001', 'OBS-001']
+    } catch (error: any) {
+      // Handle network errors gracefully
+      if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message?.includes('Failed to fetch') || error.isNetworkError) {
+        // Service is not available, return default wells
+        return ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
+      }
+      // For other errors, also return default wells
+      return ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
     }
   }
 }

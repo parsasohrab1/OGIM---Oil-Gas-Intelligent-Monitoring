@@ -36,7 +36,9 @@ export default function DVR() {
         const response = await apiClient.get('/api/dvr/quality')
         return response.data as QualityScore[]
       } catch (error: any) {
-        console.error('Failed to fetch quality scores:', error)
+        if (import.meta.env.DEV) {
+          console.debug('DVR service unavailable')
+        }
         // Return mock data when backend is not available
         return [
           {
@@ -80,7 +82,9 @@ export default function DVR() {
         })
         return response.data as ValidationResult
       } catch (error: any) {
-        console.error('Failed to validate:', error)
+        if (import.meta.env.DEV) {
+          console.debug('Validation service unavailable')
+        }
         // Return mock validation result
         return {
           sensor_id: selectedSensor,
@@ -110,7 +114,9 @@ export default function DVR() {
         })
         return response.data
       } catch (error: any) {
-        console.error('Failed to detect outliers:', error)
+        if (import.meta.env.DEV) {
+          console.debug('Outlier detection service unavailable')
+        }
         // Return empty array when backend is not available
         return []
       }

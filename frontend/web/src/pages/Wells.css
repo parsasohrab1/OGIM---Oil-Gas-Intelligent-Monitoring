@@ -1,0 +1,253 @@
+.wells-page {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.wells-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.wells-header h2 {
+  margin: 0;
+  color: #333;
+}
+
+.time-range-selector {
+  display: flex;
+  gap: 10px;
+}
+
+.time-range-selector button {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  background: white;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.time-range-selector button:hover {
+  background: #f5f5f5;
+}
+
+.time-range-selector button.active {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.wells-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.well-card {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.well-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.well-card.normal {
+  border-left: 4px solid #28a745;
+}
+
+.well-card.warning {
+  border-left: 4px solid #ffc107;
+}
+
+.well-card.critical {
+  border-left: 4px solid #dc3545;
+}
+
+.well-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.well-card-header h3 {
+  margin: 0;
+  color: #333;
+  font-size: 1.2em;
+}
+
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.status-badge.normal {
+  background: #d4edda;
+  color: #155724;
+}
+
+.status-badge.warning {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.status-badge.critical {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.well-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.well-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.well-metric:last-child {
+  border-bottom: none;
+}
+
+.metric-label {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.metric-value {
+  font-weight: 600;
+  color: #333;
+  font-size: 1.1em;
+}
+
+.well-meta {
+  display: flex;
+  gap: 20px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+  font-size: 0.85em;
+  color: #666;
+}
+
+.well-update {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+  font-size: 0.8em;
+  color: #999;
+}
+
+.well-details {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 30px;
+  margin-top: 30px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.well-details h3 {
+  margin: 0 0 20px 0;
+  color: #333;
+  border-bottom: 2px solid #007bff;
+  padding-bottom: 10px;
+}
+
+.well-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.chart-container {
+  padding: 20px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  border: 1px solid #eee;
+}
+
+.chart-container h4 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 1.1em;
+}
+
+.no-data {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.no-data p {
+  margin: 10px 0;
+}
+
+.well-selection-hint {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+  font-style: italic;
+  background: #f9f9f9;
+  border-radius: 8px;
+  margin-top: 30px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-size: 1.1em;
+}
+
+.loading-message {
+  text-align: center;
+  padding: 20px;
+  color: #666;
+  font-size: 0.95em;
+  background: #f0f0f0;
+  border-radius: 4px;
+  margin-bottom: 20px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .wells-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .wells-header {
+    flex-direction: column;
+    gap: 15px;
+    align-items: flex-start;
+  }
+
+  .time-range-selector {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .time-range-selector button {
+    flex: 1;
+  }
+}
+

@@ -11,8 +11,12 @@ export default function Alerts() {
       try {
         return await alertAPI.getAlerts()
       } catch (error: any) {
-        console.error('Failed to fetch alerts:', error)
-        // Return mock data when backend is not available
+        // Silently handle errors - backend may not be running
+        // Only log in development mode
+        if (import.meta.env.DEV) {
+          console.debug('Alert service not available:', error.message)
+        }
+        // Return empty alerts when backend is not available
         return {
           count: 0,
           alerts: []
@@ -20,7 +24,7 @@ export default function Alerts() {
       }
     },
     refetchInterval: 30000,
-    retry: 2,
+    retry: false, // Don't retry if service is down
     retryDelay: 3000,
   })
   

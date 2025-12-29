@@ -22,7 +22,10 @@ export default function Dashboard() {
           flowRate: record.sensor_type === 'flow_rate' ? record.value : null,
         })) || []
       } catch (error: any) {
-        console.error('Failed to fetch sensor data:', error)
+        // Silently handle errors - backend may not be running
+        if (import.meta.env.DEV) {
+          console.debug('Sensor data service unavailable')
+        }
         // Fallback to mock data when backend is not available
         return Array.from({ length: 20 }, (_, i) => ({
           time: new Date(Date.now() - (20 - i) * 60000).toLocaleTimeString(),
@@ -44,7 +47,10 @@ export default function Dashboard() {
       try {
         return await alertAPI.getAlerts({ status: 'open' })
       } catch (error: any) {
-        console.error('Failed to fetch alerts:', error)
+        // Silently handle errors - backend may not be running
+        if (import.meta.env.DEV) {
+          console.debug('Alert service unavailable')
+        }
         // Return empty alerts when backend is not available
         return { count: 0, alerts: [] }
       }
