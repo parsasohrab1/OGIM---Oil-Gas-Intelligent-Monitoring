@@ -16,6 +16,8 @@
   - مثال‌های کد
 - **[REPO_STRUCTURE](REPO_STRUCTURE.md)** - ساختار پوشه‌ها و بخش‌های اصلی پروژه
 - **[DEVELOPER_GUIDE](DEVELOPER_GUIDE.md)** - راهنمای توسعه‌دهنده و گردش کار
+- **[USER_GUIDE](USER_GUIDE.md)** - راهنمای کاربر نهایی (Dashboard/Alerts/BI/3D/AR)
+- **[API_REFERENCE](API_REFERENCE.md)** - مرجع API به‌روز با endpointهای جدید
 
 ### ⚙️ نصب و راه‌اندازی
 
@@ -152,6 +154,7 @@
 - **Data Ingestion:** http://localhost:8002/docs
 - **Alert Service:** http://localhost:8003/docs
 - **ML Inference:** http://localhost:8004/docs
+- **API Curated Reference:** [API_REFERENCE.md](API_REFERENCE.md)
 
 ### رابط کاربری
 - **Web Portal:** http://localhost:3000

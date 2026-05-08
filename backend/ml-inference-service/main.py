@@ -95,6 +95,7 @@ class InferenceRequest(BaseModel):
     sensor_id: str
     features: Dict[str, float]
     model_type: str = "anomaly_detection"  # or "failure_prediction"
+    model_version: Optional[int] = None
 
 
 class InferenceResponse(BaseModel):
@@ -104,6 +105,8 @@ class InferenceResponse(BaseModel):
     probability: float
     anomaly_score: Optional[float] = None
     failure_probability: Optional[float] = None
+    model_version: Optional[int] = None
+    deployment_variant: Optional[str] = None
     timestamp: datetime
 
 
@@ -143,6 +146,27 @@ class TrainLSTMResponse(BaseModel):
     metrics: Dict[str, float]
     epochs_trained: int
     message: str
+
+
+class ModelCompareRequest(BaseModel):
+    baseline_version: int
+    candidate_version: int
+
+
+class ABTestConfigRequest(BaseModel):
+    baseline_version: int
+    candidate_version: int
+    candidate_weight: float = 0.5
+    seed: int = 42
+
+
+class DriftBaselineRequest(BaseModel):
+    features: List[Dict[str, float]]
+
+
+class DriftDetectRequest(BaseModel):
+    features: List[Dict[str, float]]
+    threshold: float = 0.5
 
 
 @app.on_event("startup")
@@ -211,12 +235,20 @@ async def infer(request: InferenceRequest):
         start_time = time.perf_counter()
 
     try:
+        selected_version = request.model_version
+        deployment_variant = "default"
+        if MLFLOW_AVAILABLE and mlflow_manager and request.model_version is None:
+            selected_version, deployment_variant = mlflow_manager.resolve_model_for_request(
+                request.model_type,
+                request.sensor_id,
+            )
+
         # Use MLflow models if available, otherwise fallback to mock
         if MLFLOW_AVAILABLE and mlflow_manager:
             if request.model_type == "anomaly_detection":
-                result = mlflow_manager.predict_anomaly(request.features)
+                result = mlflow_manager.predict_anomaly(request.features, version=selected_version)
             elif request.model_type == "failure_prediction":
-                result = mlflow_manager.predict_failure(request.features)
+                result = mlflow_manager.predict_failure(request.features, version=selected_version)
             elif request.model_type == "time_series_forecast":
                 raise HTTPException(
                     status_code=400,
@@ -247,6 +279,8 @@ async def infer(request: InferenceRequest):
             probability=result["probability"],
             anomaly_score=result.get("anomaly_score"),
             failure_probability=result.get("failure_probability"),
+            model_version=selected_version,
+            deployment_variant=deployment_variant,
             timestamp=datetime.utcnow()
         )
     except RuntimeError as exc:
@@ -528,6 +562,137 @@ async def reload_models(
 
     results = mlflow_manager.load_registered_models()
     return {"loaded": results}
+
+
+@app.get("/models/{model_type}/versions")
+async def list_model_versions(
+    model_type: str,
+    limit: int = 20,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"})),
+):
+    """List model versions from MLflow registry."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+    registry_name = MODEL_TYPE_TO_REGISTRY.get(model_type)
+    if not registry_name:
+        raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
+    try:
+        versions = mlflow_manager.list_model_versions(registry_name, limit=limit)
+        return {"model_type": model_type, "registry": registry_name, "versions": versions}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to list versions: {exc}")
+
+
+@app.post("/models/{model_type}/compare")
+async def compare_model_versions(
+    model_type: str,
+    request: ModelCompareRequest,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"})),
+):
+    """Compare baseline/candidate model versions."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+    registry_name = MODEL_TYPE_TO_REGISTRY.get(model_type)
+    if not registry_name:
+        raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
+    try:
+        result = mlflow_manager.compare_model_versions(
+            model_name=registry_name,
+            baseline_version=request.baseline_version,
+            candidate_version=request.candidate_version,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Comparison failed: {exc}")
+
+
+@app.post("/models/{model_type}/ab-test")
+async def configure_ab_test(
+    model_type: str,
+    request: ABTestConfigRequest,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"})),
+):
+    """Configure A/B test rollout for inference routing."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+    if model_type == "time_series_forecast":
+        raise HTTPException(status_code=400, detail="A/B testing currently supports only inference endpoints.")
+    if model_type not in MODEL_TYPE_TO_REGISTRY:
+        raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
+
+    try:
+        cfg = mlflow_manager.configure_ab_test(
+            model_key=model_type,
+            baseline_version=request.baseline_version,
+            candidate_version=request.candidate_version,
+            candidate_weight=request.candidate_weight,
+            seed=request.seed,
+        )
+        return {"model_type": model_type, "ab_test": cfg}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"A/B configuration failed: {exc}")
+
+
+@app.get("/models/{model_type}/ab-test")
+async def get_ab_test_config(
+    model_type: str,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"})),
+):
+    """Get active A/B test configuration."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+    cfg = mlflow_manager.get_ab_test(model_type)
+    if not cfg:
+        return {"model_type": model_type, "ab_test": None}
+    return {"model_type": model_type, "ab_test": cfg}
+
+
+@app.post("/models/{model_type}/drift/baseline")
+async def set_drift_baseline(
+    model_type: str,
+    request: DriftBaselineRequest,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"})),
+):
+    """Set feature distribution baseline for drift detection."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+    if model_type not in MODEL_TYPE_TO_REGISTRY:
+        raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
+    try:
+        baseline = mlflow_manager.set_feature_baseline(model_type, request.features)
+        return {"model_type": model_type, "baseline": baseline}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Baseline creation failed: {exc}")
+
+
+@app.post("/models/{model_type}/drift/detect")
+async def detect_drift(
+    model_type: str,
+    request: DriftDetectRequest,
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"})),
+):
+    """Detect feature drift against the configured baseline."""
+    if not (MLFLOW_AVAILABLE and mlflow_manager):
+        raise HTTPException(status_code=503, detail="MLflow integration not available")
+    if model_type not in MODEL_TYPE_TO_REGISTRY:
+        raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
+    try:
+        result = mlflow_manager.detect_feature_drift(
+            model_key=model_type,
+            features=request.features,
+            threshold=request.threshold,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Drift detection failed: {exc}")
 
 
 @app.get("/health")

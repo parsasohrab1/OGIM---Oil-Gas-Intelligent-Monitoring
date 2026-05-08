@@ -18,6 +18,13 @@
 
 ## <a name="persian"></a>📖 توضیحات (فارسی)
 
+### 🆕 به‌روزرسانی‌های اخیر مستندات
+
+- مرجع API جدید: [`API_REFERENCE.md`](API_REFERENCE.md)
+- راهنمای کاربر جدید: [`USER_GUIDE.md`](USER_GUIDE.md)
+- آدرس‌ها و endpointهای به‌روز: [`../SERVICE_URLS.md`](../SERVICE_URLS.md)
+- Observability/APM و امنیت SIEM: [`OBSERVABILITY.md`](OBSERVABILITY.md), [`TRACING.md`](TRACING.md)
+
 ### 🎯 درباره پروژه
 
 OGIM یک سیستم جامع و هوشمند برای نظارت، پایش و کنترل میدان‌های نفت و گاز است که با استفاده از فناوری‌های مدرن شامل:

@@ -26,6 +26,10 @@ export default function Reports() {
   const [wellName, setWellName] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [builderName, setBuilderName] = useState('Pressure BI Report')
+  const [builderDimensions, setBuilderDimensions] = useState('well_name,sensor_type')
+  const [builderMeasures, setBuilderMeasures] = useState('count,avg_value,max_value')
+  const [builderResult, setBuilderResult] = useState<any>(null)
 
   // Fetch reports
   const { data: reportsData, isLoading } = useQuery({
@@ -108,7 +112,7 @@ export default function Reports() {
       setStartDate('')
       setEndDate('')
     },
-    onError: (error: any) => {
+    onError: () => {
       if (import.meta.env.DEV) {
         console.debug('Report generation failed')
       }
@@ -133,6 +137,32 @@ export default function Reports() {
   }
 
   const reports = reportsData?.reports || []
+
+  const { data: biMetadata } = useQuery({
+    queryKey: ['bi-metadata'],
+    queryFn: async () => reportingAPI.getBIMetadata(),
+    retry: 1
+  })
+
+  const { data: biConnectors } = useQuery({
+    queryKey: ['bi-connectors'],
+    queryFn: async () => reportingAPI.getBIConnectors(),
+    retry: 1
+  })
+
+  const reportBuilderMutation = useMutation({
+    mutationFn: async () => {
+      return reportingAPI.runReportBuilder({
+        name: builderName,
+        well_name: wellName || undefined,
+        dimensions: builderDimensions.split(',').map((x) => x.trim()).filter(Boolean),
+        measures: builderMeasures.split(',').map((x) => x.trim()).filter(Boolean),
+        filters: {},
+        limit: 50
+      })
+    },
+    onSuccess: (data) => setBuilderResult(data)
+  })
 
   if (isLoading) {
     return <div className="loading">Loading reports...</div>
@@ -296,6 +326,64 @@ export default function Reports() {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="reports-list" style={{ marginTop: '2rem' }}>
+        <h3>Advanced Analytics / BI Report Builder</h3>
+        <div className="generate-form">
+          <div className="form-group">
+            <label>Report Name</label>
+            <input value={builderName} onChange={(e) => setBuilderName(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Dimensions (comma-separated)</label>
+            <input value={builderDimensions} onChange={(e) => setBuilderDimensions(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Measures (comma-separated)</label>
+            <input value={builderMeasures} onChange={(e) => setBuilderMeasures(e.target.value)} />
+          </div>
+          <button
+            className="btn-submit"
+            onClick={() => reportBuilderMutation.mutate()}
+            disabled={reportBuilderMutation.isPending}
+          >
+            {reportBuilderMutation.isPending ? 'Building...' : 'Run Report Builder'}
+          </button>
+        </div>
+
+        {builderResult && (
+          <div className="report-card" style={{ marginTop: '1rem' }}>
+            <div className="report-header">
+              <div>
+                <span className="report-id">{builderResult.report_id}</span>
+                <span className="report-type custom">advanced_bi</span>
+              </div>
+            </div>
+            <div className="report-body">
+              <p><strong>Rows:</strong> {builderResult.count}</p>
+              <pre style={{ overflow: 'auto', maxHeight: '240px', background: '#f8f8f8', padding: '8px' }}>
+                {JSON.stringify(builderResult.rows?.slice(0, 10) || [], null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="reports-list" style={{ marginTop: '2rem' }}>
+        <h3>Power BI / Tableau Connectors</h3>
+        <div className="report-card">
+          <div className="report-body">
+            <p><strong>Metadata:</strong></p>
+            <pre style={{ overflow: 'auto', background: '#f8f8f8', padding: '8px' }}>
+              {JSON.stringify(biMetadata || {}, null, 2)}
+            </pre>
+            <p><strong>Connector Templates:</strong></p>
+            <pre style={{ overflow: 'auto', background: '#f8f8f8', padding: '8px' }}>
+              {JSON.stringify(biConnectors || {}, null, 2)}
+            </pre>
+          </div>
+        </div>
       </div>
     </div>
   )

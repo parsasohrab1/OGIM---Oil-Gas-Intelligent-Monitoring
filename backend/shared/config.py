@@ -53,6 +53,10 @@ class Settings(BaseSettings):
         default="postgresql://ogim_user:ogim_password@postgres:5432/ogim",
         env="DATABASE_URL"
     )
+    DATABASE_POOL_SIZE: int = Field(default=20, env="DATABASE_POOL_SIZE")
+    DATABASE_MAX_OVERFLOW: int = Field(default=40, env="DATABASE_MAX_OVERFLOW")
+    DATABASE_POOL_RECYCLE_SECONDS: int = Field(default=1800, env="DATABASE_POOL_RECYCLE_SECONDS")
+    DATABASE_POOL_TIMEOUT_SECONDS: int = Field(default=30, env="DATABASE_POOL_TIMEOUT_SECONDS")
     TIMESCALE_URL: str = Field(
         default="postgresql://ogim_user:ogim_password@timescaledb:5432/ogim_tsdb",
         env="TIMESCALE_URL"
@@ -204,6 +208,29 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     LOG_FORMAT: str = "json"  # json or text
+
+    # OpenTelemetry
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = Field(
+        default="http://localhost:4317",
+        env="OTEL_EXPORTER_OTLP_ENDPOINT",
+    )
+    OTEL_TRACING_CONSOLE: bool = Field(default=False, env="OTEL_TRACING_CONSOLE")
+
+    # Zero Trust / SIEM / Threat Detection
+    ZERO_TRUST_ENFORCED: bool = Field(default=True, env="ZERO_TRUST_ENFORCED")
+    ZERO_TRUST_ALLOWED_NETWORKS: Optional[str] = Field(default="127.0.0.1/32,10.0.0.0/8,192.168.0.0/16", env="ZERO_TRUST_ALLOWED_NETWORKS")
+    THREAT_BLOCK_THRESHOLD: int = Field(default=70, env="THREAT_BLOCK_THRESHOLD")
+    SIEM_OUTPUT_FILE: Optional[str] = Field(default=None, env="SIEM_OUTPUT_FILE")
+
+    # API / Cache performance tuning
+    API_GATEWAY_UPSTREAM_TIMEOUT_SECONDS: int = Field(default=15, env="API_GATEWAY_UPSTREAM_TIMEOUT_SECONDS")
+    API_GATEWAY_HTTP_KEEPALIVE_CONNECTIONS: int = Field(default=100, env="API_GATEWAY_HTTP_KEEPALIVE_CONNECTIONS")
+    API_GATEWAY_HTTP_MAX_CONNECTIONS: int = Field(default=300, env="API_GATEWAY_HTTP_MAX_CONNECTIONS")
+    API_SECURITY_MAX_BODY_BYTES: int = Field(default=1024 * 1024, env="API_SECURITY_MAX_BODY_BYTES")
+    API_SECURITY_MAX_QUERY_PARAMS: int = Field(default=50, env="API_SECURITY_MAX_QUERY_PARAMS")
+    API_SECURITY_MAX_PARAM_LENGTH: int = Field(default=1024, env="API_SECURITY_MAX_PARAM_LENGTH")
+    API_SECURITY_ENABLE_INPUT_HARDENING: bool = Field(default=True, env="API_SECURITY_ENABLE_INPUT_HARDENING")
+    CACHE_TTL_SECONDS: int = Field(default=10, env="CACHE_TTL_SECONDS")
     
     # OPC-UA / SCADA
     OPCUA_SERVER_URL: Optional[str] = Field(default=None, env="OPCUA_SERVER_URL")

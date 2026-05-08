@@ -18,26 +18,25 @@ client = TestClient(api_gateway.app)
 @pytest.fixture(autouse=True)
 def reset_state():
     # Ensure request state is clean between tests
+    class DummyUpstreamClient:
+        async def request(self, *args, **kwargs):
+            return httpx.Response(status_code=200, json={"result": "ok"})
+
+    api_gateway.upstream_client = DummyUpstreamClient()
+    api_gateway.settings.RATE_LIMIT_ENABLED = False
+    api_gateway.settings.ZERO_TRUST_ENFORCED = False
+    api_gateway.settings.API_SECURITY_ENABLE_INPUT_HARDENING = True
     yield
 
 
 def stub_async_client(monkeypatch, response=None, exception=None):
-    class DummyAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
+    class DummyUpstreamClient:
         async def request(self, *args, **kwargs):
             if exception:
                 raise exception
             return response
 
-    monkeypatch.setattr(api_gateway.httpx, "AsyncClient", DummyAsyncClient)
+    api_gateway.upstream_client = DummyUpstreamClient()
 
 
 def stub_decode_token(monkeypatch, *, payload=None, error=None):
@@ -69,12 +68,11 @@ def test_proxy_rejects_invalid_token(monkeypatch):
 
 def test_proxy_success_json(monkeypatch):
     stub_decode_token(monkeypatch)
-    downstream_response = httpx.Response(status_code=200, json={"result": "ok"})
-    stub_async_client(monkeypatch, response=downstream_response)
 
     response = client.get("/api/alert/alerts", headers=auth_header())
     assert response.status_code == 200
     assert response.json() == {"result": "ok"}
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_proxy_downstream_error_propagates_status(monkeypatch):
@@ -111,8 +109,31 @@ def test_proxy_timeout_returns_gateway_timeout(monkeypatch):
 
 
 def test_proxy_forbidden_for_insufficient_role(monkeypatch):
+    api_gateway.settings.ZERO_TRUST_ENFORCED = True
+    api_gateway.settings.ZERO_TRUST_ALLOWED_NETWORKS = ""
     stub_decode_token(monkeypatch, payload={"sub": "viewer", "role": "viewer"})
     response = client.get("/api/command-control/commands", headers=auth_header())
     assert response.status_code == 403
     assert response.json()["detail"] == "Not enough permissions"
+
+
+def test_proxy_blocks_suspicious_query(monkeypatch):
+    stub_decode_token(monkeypatch)
+    response = client.get(
+        "/api/alert/alerts?search=<script>alert(1)</script>",
+        headers=auth_header(),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Request contains blocked input patterns"
+
+
+def test_proxy_blocks_malformed_json(monkeypatch):
+    stub_decode_token(monkeypatch)
+    response = client.post(
+        "/api/alert/alerts",
+        headers={**auth_header(), "Content-Type": "application/json"},
+        content="{not-json",
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Malformed JSON payload"
 

@@ -2,9 +2,11 @@
 MLflow integration for model management
 """
 import glob
+import hashlib
 import logging
 import os
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
@@ -84,6 +86,8 @@ class MLflowModelManager:
         self.scalers: Dict[str, Any] = {}
         # LSTM specific parameters
         self.lstm_params: Dict[str, Any] = {}
+        self.ab_deployments: Dict[str, Dict[str, Any]] = {}
+        self.feature_baselines: Dict[str, Dict[str, Any]] = {}
 
         logger.info(f"MLflow tracking URI: {self.tracking_uri}")
 
@@ -318,6 +322,12 @@ class MLflowModelManager:
             logger.error(f"Failed to load model {model_name}: {e}")
             return None
 
+    def load_model_version(self, model_name: str, version: int) -> Optional[Any]:
+        """Load a specific registry version into memory."""
+        if version <= 0:
+            raise ValueError("Version must be greater than zero.")
+        return self.load_model(model_name, version=version)
+
     def load_registered_models(self):
         """Best-effort load of supported models from the registry."""
         results = {}
@@ -325,9 +335,210 @@ class MLflowModelManager:
             results[registry_name] = self.load_model(registry_name) is not None
         return results
 
-    def predict_anomaly(self, features: Dict[str, float]) -> Dict[str, Any]:
+    def list_model_versions(self, model_name: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """List recent registry versions with run metadata."""
+        client = mlflow.tracking.MlflowClient()
+        versions = client.search_model_versions(f"name='{model_name}'")
+        versions_sorted = sorted(versions, key=lambda v: int(v.version), reverse=True)[:limit]
+
+        result: List[Dict[str, Any]] = []
+        for entry in versions_sorted:
+            run_metrics: Dict[str, float] = {}
+            run_params: Dict[str, str] = {}
+            try:
+                run = client.get_run(entry.run_id)
+                run_metrics = dict(run.data.metrics)
+                run_params = dict(run.data.params)
+            except Exception:
+                pass
+
+            result.append(
+                {
+                    "version": int(entry.version),
+                    "run_id": entry.run_id,
+                    "stage": entry.current_stage,
+                    "status": entry.status,
+                    "source": entry.source,
+                    "created_at": entry.creation_timestamp,
+                    "metrics": run_metrics,
+                    "params": run_params,
+                }
+            )
+        return result
+
+    def compare_model_versions(
+        self,
+        model_name: str,
+        baseline_version: int,
+        candidate_version: int,
+    ) -> Dict[str, Any]:
+        """Compare metrics and params between two model versions."""
+        versions = self.list_model_versions(model_name, limit=100)
+        by_version = {item["version"]: item for item in versions}
+        baseline = by_version.get(baseline_version)
+        candidate = by_version.get(candidate_version)
+
+        if not baseline or not candidate:
+            raise ValueError("Baseline or candidate version not found.")
+
+        metric_deltas: Dict[str, Dict[str, float]] = {}
+        all_metrics = set(baseline.get("metrics", {}).keys()) | set(candidate.get("metrics", {}).keys())
+        for key in all_metrics:
+            b_val = baseline.get("metrics", {}).get(key)
+            c_val = candidate.get("metrics", {}).get(key)
+            if b_val is None or c_val is None:
+                continue
+            metric_deltas[key] = {
+                "baseline": float(b_val),
+                "candidate": float(c_val),
+                "delta": float(c_val - b_val),
+            }
+
+        param_changes: Dict[str, Dict[str, str]] = {}
+        all_params = set(baseline.get("params", {}).keys()) | set(candidate.get("params", {}).keys())
+        for key in all_params:
+            b_val = str(baseline.get("params", {}).get(key, ""))
+            c_val = str(candidate.get("params", {}).get(key, ""))
+            if b_val != c_val:
+                param_changes[key] = {"baseline": b_val, "candidate": c_val}
+
+        return {
+            "model_name": model_name,
+            "baseline": baseline,
+            "candidate": candidate,
+            "metric_deltas": metric_deltas,
+            "param_changes": param_changes,
+        }
+
+    def configure_ab_test(
+        self,
+        model_key: str,
+        baseline_version: int,
+        candidate_version: int,
+        candidate_weight: float,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        """Configure deterministic A/B routing for one model key."""
+        if candidate_weight < 0 or candidate_weight > 1:
+            raise ValueError("candidate_weight must be between 0 and 1.")
+
+        registry_name = next((k for k, v in MODEL_REGISTRY_TO_KEY.items() if v == model_key), None)
+        if not registry_name:
+            raise ValueError(f"Unknown model key: {model_key}")
+
+        self.ab_deployments[model_key] = {
+            "registry_name": registry_name,
+            "baseline_version": int(baseline_version),
+            "candidate_version": int(candidate_version),
+            "candidate_weight": float(candidate_weight),
+            "seed": int(seed),
+            "updated_at": datetime.utcnow().isoformat(),
+            "sample_count": 0,
+            "candidate_count": 0,
+            "baseline_count": 0,
+        }
+        return self.ab_deployments[model_key]
+
+    def get_ab_test(self, model_key: str) -> Optional[Dict[str, Any]]:
+        return self.ab_deployments.get(model_key)
+
+    def resolve_model_for_request(self, model_key: str, request_key: str) -> Tuple[Optional[int], str]:
+        """Resolve model version based on configured A/B test and request key."""
+        ab_cfg = self.ab_deployments.get(model_key)
+        if not ab_cfg:
+            return None, "default"
+
+        bucket = self._stable_bucket(request_key, ab_cfg["seed"])
+        selected = "candidate" if bucket < ab_cfg["candidate_weight"] else "baseline"
+        selected_version = (
+            ab_cfg["candidate_version"] if selected == "candidate" else ab_cfg["baseline_version"]
+        )
+        ab_cfg["sample_count"] += 1
+        if selected == "candidate":
+            ab_cfg["candidate_count"] += 1
+        else:
+            ab_cfg["baseline_count"] += 1
+
+        return selected_version, selected
+
+    def set_feature_baseline(self, model_key: str, features: List[Dict[str, float]]) -> Dict[str, Any]:
+        """Set baseline feature distribution used for drift checks."""
+        if not features:
+            raise ValueError("features must not be empty.")
+
+        matrix = pd.DataFrame(features).select_dtypes(include=[np.number])
+        if matrix.empty:
+            raise ValueError("No numeric feature columns found.")
+
+        means = matrix.mean().to_dict()
+        stds = matrix.std(ddof=0).replace(0, 1e-8).to_dict()
+        columns = list(matrix.columns)
+        self.feature_baselines[model_key] = {
+            "feature_names": columns,
+            "means": {k: float(v) for k, v in means.items()},
+            "stds": {k: float(v) for k, v in stds.items()},
+            "sample_size": int(len(matrix)),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        return self.feature_baselines[model_key]
+
+    def detect_feature_drift(
+        self,
+        model_key: str,
+        features: List[Dict[str, float]],
+        threshold: float = 0.5,
+    ) -> Dict[str, Any]:
+        """Detect drift using mean z-score distance from baseline."""
+        baseline = self.feature_baselines.get(model_key)
+        if not baseline:
+            raise ValueError(f"No baseline configured for model {model_key}.")
+        if not features:
+            raise ValueError("features must not be empty.")
+
+        matrix = pd.DataFrame(features).select_dtypes(include=[np.number])
+        if matrix.empty:
+            raise ValueError("No numeric feature columns found.")
+
+        drifts: Dict[str, Dict[str, float]] = {}
+        drift_detected = False
+        for feature_name in baseline["feature_names"]:
+            if feature_name not in matrix.columns:
+                continue
+
+            current_mean = float(matrix[feature_name].mean())
+            baseline_mean = float(baseline["means"][feature_name])
+            baseline_std = float(baseline["stds"][feature_name]) or 1e-8
+            z_score = abs(current_mean - baseline_mean) / baseline_std
+            is_feature_drift = z_score >= threshold
+            drift_detected = drift_detected or is_feature_drift
+            drifts[feature_name] = {
+                "baseline_mean": baseline_mean,
+                "current_mean": current_mean,
+                "z_score": float(z_score),
+                "drift": is_feature_drift,
+            }
+
+        aggregate_score = float(np.mean([v["z_score"] for v in drifts.values()])) if drifts else 0.0
+        return {
+            "model_key": model_key,
+            "threshold": threshold,
+            "aggregate_score": aggregate_score,
+            "drift_detected": drift_detected,
+            "feature_drift": drifts,
+            "evaluated_samples": int(len(matrix)),
+        }
+
+    @staticmethod
+    def _stable_bucket(request_key: str, seed: int) -> float:
+        digest = hashlib.sha256(f"{seed}:{request_key}".encode("utf-8")).hexdigest()
+        value = int(digest[:8], 16)
+        return value / 0xFFFFFFFF
+
+    def predict_anomaly(self, features: Dict[str, float], version: Optional[int] = None) -> Dict[str, Any]:
         """Predict anomaly"""
-        model = self.models.get("anomaly_detection") or self.load_model("anomaly-detection")
+        model = self.load_model("anomaly-detection", version=version) if version else (
+            self.models.get("anomaly_detection") or self.load_model("anomaly-detection")
+        )
         if model is None:
             raise RuntimeError("Anomaly detection model not available. Load or train the model before inference.")
 
@@ -347,9 +558,11 @@ class MLflowModelManager:
             "probability": float(anomaly_prob)
         }
 
-    def predict_failure(self, features: Dict[str, float]) -> Dict[str, Any]:
+    def predict_failure(self, features: Dict[str, float], version: Optional[int] = None) -> Dict[str, Any]:
         """Predict failure"""
-        model = self.models.get("failure_prediction") or self.load_model("failure-prediction")
+        model = self.load_model("failure-prediction", version=version) if version else (
+            self.models.get("failure_prediction") or self.load_model("failure-prediction")
+        )
         if model is None:
             raise RuntimeError("Failure prediction model not available. Load or train the model before inference.")
 

@@ -2,14 +2,15 @@
 Alert Service
 Manages alert rules, de-duplication, escalation, and silencing
 """
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import uvicorn
 import sys
 import os
+import uuid
 
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
@@ -23,7 +24,6 @@ from auth import require_authentication, require_roles
 from tracing import setup_tracing
 from metrics import setup_metrics
 from sqlalchemy.orm import Session
-import httpx
 import httpx
 import asyncio
 
@@ -46,6 +46,14 @@ app.add_middleware(
 
 # Kafka producer
 alert_producer = None
+ALERT_CORRELATION_WINDOW_MINUTES = int(os.getenv("ALERT_CORRELATION_WINDOW_MINUTES", "15"))
+ALERT_FATIGUE_COOLDOWN_SECONDS = {
+    "critical": int(os.getenv("ALERT_FATIGUE_COOLDOWN_CRITICAL", "60")),
+    "warning": int(os.getenv("ALERT_FATIGUE_COOLDOWN_WARNING", "180")),
+    "info": int(os.getenv("ALERT_FATIGUE_COOLDOWN_INFO", "300")),
+}
+REGISTERED_PUSH_DEVICES: Dict[str, Dict[str, Any]] = {}
+EXPO_PUSH_API_URL = "https://exp.host/--/api/v2/push/send"
 
 
 class AlertCreate(BaseModel):
@@ -71,6 +79,7 @@ class AlertResponse(BaseModel):
     acknowledged_by_id: Optional[int] = None
     acknowledged_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
+    metadata_json: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -97,6 +106,111 @@ class AlertRuleResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RCARequest(BaseModel):
+    lookback_minutes: int = 60
+
+
+class PushDeviceRegisterRequest(BaseModel):
+    user_id: str
+    platform: str
+    device_token: str
+
+
+def _severity_rank(severity: str) -> int:
+    return {"critical": 3, "warning": 2, "info": 1}.get(severity.lower(), 0)
+
+
+def _default_metadata() -> Dict[str, Any]:
+    return {
+        "correlation_id": None,
+        "first_seen_at": None,
+        "last_seen_at": None,
+        "occurrence_count": 0,
+        "suppressed_count": 0,
+        "fatigue": {"cooldown_s": 0, "last_notified_at": None},
+        "rca": None,
+    }
+
+
+def _merge_metadata(existing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = _default_metadata()
+    if isinstance(existing, dict):
+        merged.update(existing)
+    return merged
+
+
+def _should_suppress_for_fatigue(alert: AlertCreate, existing: Alert) -> bool:
+    cooldown_s = ALERT_FATIGUE_COOLDOWN_SECONDS.get(alert.severity.lower(), 120)
+    if existing.timestamp is None:
+        return False
+    age_seconds = (datetime.utcnow() - existing.timestamp).total_seconds()
+    return age_seconds < cooldown_s
+
+
+def _derive_correlation_key(alert: AlertCreate) -> str:
+    sensor = (alert.sensor_id or "unknown").strip()
+    well = (alert.well_name or "unknown").strip()
+    rule = (alert.rule_name or "unknown").strip()
+    return f"{well}:{rule}:{sensor}"
+
+
+def _infer_rca(candidates: List[Alert]) -> Dict[str, Any]:
+    if not candidates:
+        return {
+            "suspected_root_cause": "insufficient_data",
+            "confidence": 0.2,
+            "reasoning": "Not enough related alerts to infer RCA.",
+            "contributing_alerts": [],
+        }
+
+    by_rule: Dict[str, int] = {}
+    by_sensor: Dict[str, int] = {}
+    max_severity = "info"
+    for a in candidates:
+        by_rule[a.rule_name] = by_rule.get(a.rule_name, 0) + 1
+        by_sensor[a.tag_id or "unknown"] = by_sensor.get(a.tag_id or "unknown", 0) + 1
+        if _severity_rank(a.severity) > _severity_rank(max_severity):
+            max_severity = a.severity
+
+    top_rule = max(by_rule, key=by_rule.get)
+    top_sensor = max(by_sensor, key=by_sensor.get)
+    confidence = min(0.95, 0.4 + (by_rule[top_rule] / max(1, len(candidates))) * 0.5)
+    return {
+        "suspected_root_cause": f"{top_rule}:{top_sensor}",
+        "confidence": round(confidence, 2),
+        "reasoning": (
+            f"Dominant rule '{top_rule}' observed {by_rule[top_rule]} times with max severity '{max_severity}'."
+        ),
+        "contributing_alerts": [a.alert_id for a in candidates[:10]],
+    }
+
+
+async def _send_push_notification(title: str, body: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    tokens = [item["device_token"] for item in REGISTERED_PUSH_DEVICES.values()]
+    if not tokens:
+        return {"sent": 0, "reason": "no_registered_devices"}
+
+    messages = [
+        {
+            "to": token,
+            "title": title,
+            "body": body,
+            "sound": "default",
+            "data": data or {},
+        }
+        for token in tokens
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(EXPO_PUSH_API_URL, json=messages)
+            response.raise_for_status()
+            payload = response.json()
+            return {"sent": len(messages), "result": payload}
+    except Exception as exc:
+        logger.error("Push send failed: %s", exc)
+        return {"sent": 0, "reason": str(exc)}
 
 
 # Role dependencies
@@ -131,18 +245,88 @@ async def create_alert(
     _: Dict[str, Any] = Depends(require_alert_write)
 ):
     """Create a new alert"""
-    # De-duplication: check if similar alert exists
+    # De-duplication + fatigue suppression: check if similar alert exists
     existing = db.query(Alert).filter(
         Alert.well_name == alert.well_name,
         Alert.rule_name == alert.rule_name,
+        Alert.tag_id == alert.sensor_id,
         Alert.status == "open"
-    ).first()
+    ).order_by(Alert.timestamp.desc()).first()
     
     if existing:
-        logger.info(f"Duplicate alert suppressed: {alert.alert_id}")
-        return {"message": "Duplicate alert suppressed", "alert_id": existing.alert_id}
+        existing_meta = _merge_metadata(existing.metadata_json)
+        existing_meta["occurrence_count"] = int(existing_meta.get("occurrence_count", 1)) + 1
+        existing_meta["last_seen_at"] = datetime.utcnow().isoformat()
+        cooldown_s = ALERT_FATIGUE_COOLDOWN_SECONDS.get(alert.severity.lower(), 120)
+        fatigue_meta = existing_meta.get("fatigue", {}) or {}
+        fatigue_meta["cooldown_s"] = cooldown_s
+
+        if _should_suppress_for_fatigue(alert, existing):
+            existing_meta["suppressed_count"] = int(existing_meta.get("suppressed_count", 0)) + 1
+            fatigue_meta["last_notified_at"] = fatigue_meta.get("last_notified_at") or existing.timestamp.isoformat()
+            existing.metadata_json = existing_meta
+            existing.timestamp = max(existing.timestamp, alert.timestamp)
+            db.commit()
+            logger.info(f"Alert fatigue suppression triggered: {alert.alert_id}")
+            return {
+                "message": "Alert suppressed by fatigue policy",
+                "alert_id": existing.alert_id,
+                "suppressed_count": existing_meta["suppressed_count"],
+                "correlation_id": existing_meta.get("correlation_id"),
+            }
+
+        fatigue_meta["last_notified_at"] = datetime.utcnow().isoformat()
+        existing_meta["fatigue"] = fatigue_meta
+        existing.metadata_json = existing_meta
+        existing.timestamp = max(existing.timestamp, alert.timestamp)
+        db.commit()
+        logger.info(f"Duplicate alert correlated: {alert.alert_id}")
+        return {
+            "message": "Duplicate alert correlated with existing open alert",
+            "alert_id": existing.alert_id,
+            "correlation_id": existing_meta.get("correlation_id"),
+            "occurrence_count": existing_meta["occurrence_count"],
+        }
+
+    correlation_cutoff = datetime.utcnow() - timedelta(minutes=ALERT_CORRELATION_WINDOW_MINUTES)
+    related = db.query(Alert).filter(
+        Alert.well_name == alert.well_name,
+        Alert.timestamp >= correlation_cutoff
+    ).order_by(Alert.timestamp.desc()).limit(50).all()
+
+    correlation_id = None
+    for related_alert in related:
+        meta = _merge_metadata(related_alert.metadata_json)
+        rel_corr = meta.get("correlation_id")
+        same_sensor = (related_alert.tag_id or "") == (alert.sensor_id or "")
+        same_rule = related_alert.rule_name == alert.rule_name
+        if rel_corr and (same_sensor or same_rule):
+            correlation_id = rel_corr
+            break
+    if not correlation_id:
+        correlation_id = f"corr-{uuid.uuid4().hex[:12]}-{_derive_correlation_key(alert)}"
     
     # Create alert
+    now_iso = datetime.utcnow().isoformat()
+    metadata_json = _default_metadata()
+    metadata_json.update(
+        {
+            "correlation_id": correlation_id,
+            "first_seen_at": now_iso,
+            "last_seen_at": now_iso,
+            "occurrence_count": 1,
+            "suppressed_count": 0,
+            "fatigue": {
+                "cooldown_s": ALERT_FATIGUE_COOLDOWN_SECONDS.get(alert.severity.lower(), 120),
+                "last_notified_at": now_iso,
+            },
+            "correlation_context": {
+                "window_minutes": ALERT_CORRELATION_WINDOW_MINUTES,
+                "related_alert_candidates": [a.alert_id for a in related[:10]],
+            },
+        }
+    )
+
     db_alert = Alert(
         alert_id=alert.alert_id,
         timestamp=alert.timestamp,
@@ -151,7 +335,8 @@ async def create_alert(
         well_name=alert.well_name,
         tag_id=alert.sensor_id,
         message=alert.message,
-        rule_name=alert.rule_name
+        rule_name=alert.rule_name,
+        metadata_json=metadata_json,
     )
     
     db.add(db_alert)
@@ -183,9 +368,23 @@ async def create_alert(
         
         # Run in background
         asyncio.create_task(create_work_order())
+
+    # Push notification for critical alerts (best effort).
+    if alert.severity == "critical":
+        asyncio.create_task(
+            _send_push_notification(
+                title="Critical OGIM Alert",
+                body=f"{alert.well_name}: {alert.message}",
+                data={"alert_id": alert.alert_id, "severity": alert.severity, "well_name": alert.well_name},
+            )
+        )
     
     logger.info(f"Alert created: {alert.alert_id}")
-    return {"alert_id": alert.alert_id, "message": "Alert created"}
+    return {
+        "alert_id": alert.alert_id,
+        "message": "Alert created",
+        "correlation_id": correlation_id,
+    }
 
 
 @app.get("/alerts")
@@ -265,6 +464,108 @@ async def resolve_alert(
     logger.info(f"Alert resolved: {alert_id}")
     
     return {"message": "Alert resolved", "alert_id": alert_id}
+
+
+@app.get("/alerts/correlations")
+async def list_correlated_alerts(
+    status: str = "open",
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_read),
+):
+    """List correlated alert groups to support noise reduction and triage."""
+    alerts = db.query(Alert).filter(Alert.status == status).order_by(Alert.timestamp.desc()).limit(limit).all()
+    groups: Dict[str, Dict[str, Any]] = {}
+    for alert in alerts:
+        meta = _merge_metadata(alert.metadata_json)
+        correlation_id = meta.get("correlation_id") or f"uncorrelated:{alert.alert_id}"
+        if correlation_id not in groups:
+            groups[correlation_id] = {
+                "correlation_id": correlation_id,
+                "well_name": alert.well_name,
+                "alerts": [],
+                "count": 0,
+                "max_severity": alert.severity,
+                "suppressed_total": 0,
+            }
+        groups[correlation_id]["alerts"].append(alert.alert_id)
+        groups[correlation_id]["count"] += 1
+        groups[correlation_id]["suppressed_total"] += int(meta.get("suppressed_count", 0))
+        if _severity_rank(alert.severity) > _severity_rank(groups[correlation_id]["max_severity"]):
+            groups[correlation_id]["max_severity"] = alert.severity
+
+    grouped = sorted(groups.values(), key=lambda x: (x["count"], _severity_rank(x["max_severity"])), reverse=True)
+    return {"groups": grouped, "count": len(grouped)}
+
+
+@app.post("/alerts/{alert_id}/rca")
+async def run_alert_rca(
+    alert_id: str,
+    request: RCARequest,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_read),
+):
+    """Run lightweight RCA for a given alert and store result in metadata."""
+    alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    lookback_start = datetime.utcnow() - timedelta(minutes=max(5, request.lookback_minutes))
+    candidates = db.query(Alert).filter(
+        Alert.well_name == alert.well_name,
+        Alert.timestamp >= lookback_start,
+    ).order_by(Alert.timestamp.desc()).limit(100).all()
+
+    rca = _infer_rca(candidates)
+    metadata = _merge_metadata(alert.metadata_json)
+    metadata["rca"] = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "lookback_minutes": max(5, request.lookback_minutes),
+        **rca,
+    }
+    alert.metadata_json = metadata
+    db.commit()
+
+    return {
+        "alert_id": alert_id,
+        "correlation_id": metadata.get("correlation_id"),
+        "rca": metadata["rca"],
+    }
+
+
+@app.post("/notifications/devices/register")
+async def register_push_device(
+    request: PushDeviceRegisterRequest,
+    _: Dict[str, Any] = Depends(require_alert_read),
+):
+    """Register a mobile push token for critical alert notifications."""
+    key = f"{request.user_id}:{request.device_token}"
+    REGISTERED_PUSH_DEVICES[key] = {
+        "user_id": request.user_id,
+        "platform": request.platform,
+        "device_token": request.device_token,
+        "registered_at": datetime.utcnow().isoformat(),
+    }
+    return {"message": "Device registered", "count": len(REGISTERED_PUSH_DEVICES)}
+
+
+@app.post("/notifications/devices/unregister")
+async def unregister_push_device(
+    request: PushDeviceRegisterRequest,
+    _: Dict[str, Any] = Depends(require_alert_read),
+):
+    """Unregister a mobile push token."""
+    key = f"{request.user_id}:{request.device_token}"
+    REGISTERED_PUSH_DEVICES.pop(key, None)
+    return {"message": "Device unregistered", "count": len(REGISTERED_PUSH_DEVICES)}
+
+
+@app.get("/notifications/devices")
+async def list_push_devices(
+    _: Dict[str, Any] = Depends(require_alert_admin),
+):
+    """List currently registered push devices."""
+    return {"devices": list(REGISTERED_PUSH_DEVICES.values()), "count": len(REGISTERED_PUSH_DEVICES)}
 
 
 @app.post("/alerts/{alert_id}/create-work-order")

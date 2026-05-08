@@ -1,10 +1,33 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { dataIngestionAPI, alertAPI } from '../api/services'
+import { startRealtimeStream } from '../api/realtimeStream'
 import './Dashboard.css'
 
 export default function Dashboard() {
   const queryClient = useQueryClient()
+  const [transport, setTransport] = useState<'websocket' | 'sse' | 'disconnected'>('disconnected')
+
+  useEffect(() => {
+    const stop = startRealtimeStream({
+      onTransportChange: setTransport,
+      onSnapshot: (payload) => {
+        const records = payload.data.sensor_records || []
+        const transformed = records.map((record: any) => ({
+          time: new Date(record.timestamp).toLocaleTimeString(),
+          pressure: record.sensor_type === 'pressure' ? record.value : null,
+          temperature: record.sensor_type === 'temperature' ? record.value : null,
+          flowRate: record.sensor_type === 'flow_rate' ? record.value : null,
+        }))
+
+        queryClient.setQueryData(['sensor-data'], transformed)
+        queryClient.setQueryData(['alerts', 'open'], payload.data.alerts || { count: 0, alerts: [] })
+      },
+    })
+
+    return stop
+  }, [queryClient])
   
   // Fetch sensor data from backend
   const { data: sensorData, isLoading } = useQuery({
@@ -35,7 +58,7 @@ export default function Dashboard() {
         }))
       }
     },
-    refetchInterval: 10000, // Refetch every 10 seconds
+    refetchInterval: transport === 'disconnected' ? 10000 : false,
     retry: 2, // Retry 2 times before giving up
     retryDelay: 3000, // Wait 3 seconds between retries
   })
@@ -55,7 +78,7 @@ export default function Dashboard() {
         return { count: 0, alerts: [] }
       }
     },
-    refetchInterval: 30000,
+    refetchInterval: transport === 'disconnected' ? 30000 : false,
     retry: 2,
     retryDelay: 3000,
   })
@@ -100,6 +123,9 @@ export default function Dashboard() {
     <div className="dashboard">
       <div className="dashboard-header">
         <h2>Real-Time Monitoring Dashboard</h2>
+        <div style={{ fontSize: '0.9rem', color: '#666' }}>
+          Stream: {transport === 'websocket' ? 'WebSocket' : transport === 'sse' ? 'SSE (fallback)' : 'Polling fallback'}
+        </div>
         {criticalAlerts.length > 0 && (
           <button
             onClick={handleCreateWorkOrderForCritical}

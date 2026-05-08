@@ -26,18 +26,34 @@ export OTEL_TRACING_CONSOLE=true
 
 اگر `OTEL_TRACING_CONSOLE=true` باشد، علاوه بر ارسال به endpoint، spanها در stdout نیز چاپ می‌شوند.
 
-## اجرای Jaeger (نمونه Docker Compose)
+## اجرای APM با OpenTelemetry Collector + Tempo + Grafana
 
 ```yaml
 services:
-  jaeger:
-    image: jaegertracing/all-in-one:1.45
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib
+  tempo:
+    image: grafana/tempo
+  grafana:
+    image: grafana/grafana
     ports:
-      - "16686:16686"   # UI
-      - "4317:4317"     # OTLP gRPC
+      - "3001:3000"
 ```
 
-سرویس‌های OGIM را با متغیر `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317` اجرا کنید، سپس در UI جگر (`http://localhost:16686`) با `service=api-gateway` یا سایر سرویس‌ها traceها را ببینید.
+فایل‌های آماده در پروژه:
+
+- `infrastructure/otel/otel-collector-config.yaml`
+- `infrastructure/tempo/tempo.yaml`
+- `infrastructure/grafana/provisioning/datasources/datasources.yaml`
+- `infrastructure/grafana/provisioning/dashboards/json/ogim-apm-overview.json`
+
+سرویس‌های OGIM با متغیر `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317` اجرا می‌شوند.  
+برای مشاهده traceها:
+
+1. استک را بالا بیاورید (`infrastructure/docker/docker-compose.yml`)
+2. Grafana را باز کنید: `http://localhost:3001`
+3. در Explore، datasource `Tempo` را انتخاب کنید
+4. `service.name=api-gateway` یا سایر سرویس‌ها را جستجو کنید
 
 ## جریان end-to-end
 
@@ -53,10 +69,10 @@ services:
 
 ## تست سریع
 
-1. اجرای Jaeger (یا OTEL Collector) طبق نمونه بالا.
+1. اجرای Collector + Tempo + Grafana طبق compose.
 2. اجرای سرویس‌ها با متغیر endpoint.
 3. ارسال درخواست نمونه به API Gateway (`/api/alert/alerts`).
-4. در Jaeger UI trace را بررسی کنید؛ باید حداقل دو span (gateway + سرویس داخلی) دیده شود.
+4. در Grafana Tempo trace را بررسی کنید؛ باید حداقل دو span (gateway + سرویس داخلی) دیده شود.
 
 با این تنظیم، تیم می‌تواند latency مسیر کامل هر درخواست را مشاهده و bottleneck‌ها را شناسایی کند.*** End Patch
 

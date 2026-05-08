@@ -105,15 +105,58 @@ POST   /api/digital-twin/simulate          - اجرای شبیه‌سازی
 GET    /api/digital-twin/simulations       - لیست شبیه‌سازی‌ها
 GET    /api/digital-twin/bim3d/scene/{well} - صحنه 3D BIM
 GET    /api/digital-twin/bim3d/model/{id}/state - وضعیت مدل 3D
+GET    /api/digital-twin/well/{well}/3d    - داده 3D چاه با trajectory و risk zone
+POST   /api/digital-twin/what-if           - اجرای سناریوی What-if
+GET    /api/digital-twin/ar/overlay/{well} - payload آماده AR overlay
 ```
 
 ### Reporting
 
 ```
 GET    /api/reporting/reports              - لیست گزارش‌ها
-POST   /api/reporting/reports              - ایجاد گزارش
+POST   /api/reporting/reports/generate     - ایجاد گزارش پایه
 GET    /api/reporting/reports/{id}         - دریافت گزارش
-GET    /api/reporting/reports/{id}/download - دانلود گزارش
+POST   /api/reporting/reports/data-quality-lineage - گزارش کیفیت داده + lineage
+POST   /api/reporting/reports/data-quality-lineage/auto - ایجاد گزارش خودکار
+GET    /api/reporting/reports/data-quality-lineage/auto - لیست گزارش‌های خودکار
+POST   /api/reporting/reports/builder      - Advanced BI Report Builder
+GET    /api/reporting/bi/metadata          - متادیتای BI برای Power BI/Tableau
+POST   /api/reporting/bi/query             - endpoint query برای BI
+GET    /api/reporting/bi/connectors        - template اتصال BI
+POST   /api/reporting/workflows            - ایجاد workflow
+GET    /api/reporting/workflows            - لیست workflowها
+GET    /api/reporting/workflows/{id}       - جزئیات workflow
+POST   /api/reporting/workflows/{id}/run   - اجرای workflow
+GET    /api/reporting/workflows/{id}/runs  - تاریخچه اجرا
+GET    /api/reporting/workflows/visual-builder/step-types - کاتالوگ stepها
+```
+
+### Realtime Streaming (Gateway)
+
+```
+WS     /stream/realtime/ws?token=...       - استریم real-time با WebSocket
+GET    /stream/realtime/sse?token=...      - fallback به SSE
+```
+
+### Alert Advanced
+
+```
+GET    /api/alert/alerts/correlations      - گروه‌بندی همبستگی هشدارها
+POST   /api/alert/alerts/{id}/rca          - تحلیل ریشه‌ای (RCA)
+POST   /api/alert/notifications/devices/register   - ثبت توکن Push
+POST   /api/alert/notifications/devices/unregister - حذف توکن Push
+GET    /api/alert/notifications/devices            - لیست دستگاه‌ها (admin)
+```
+
+### ML Model Management Advanced
+
+```
+GET    /api/ml-inference/models/{type}/versions           - نسخه‌های مدل
+POST   /api/ml-inference/models/{type}/compare            - مقایسه baseline/candidate
+POST   /api/ml-inference/models/{type}/ab-test            - پیکربندی A/B test
+GET    /api/ml-inference/models/{type}/ab-test            - وضعیت A/B test
+POST   /api/ml-inference/models/{type}/drift/baseline     - baseline drift
+POST   /api/ml-inference/models/{type}/drift/detect       - تشخیص drift
 ```
 
 ## 🔐 Credentials پیش‌فرض

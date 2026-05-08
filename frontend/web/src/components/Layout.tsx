@@ -113,6 +113,18 @@ export default function Layout({ children }: LayoutProps) {
           >
             Blockchain Audit
           </Link>
+          <Link
+            to="/data-quality-lineage"
+            className={location.pathname === '/data-quality-lineage' ? 'active' : ''}
+          >
+            Data Quality
+          </Link>
+          <Link
+            to="/workflow-automation"
+            className={location.pathname === '/workflow-automation' ? 'active' : ''}
+          >
+            Workflow
+          </Link>
         </div>
       </nav>
       <main className="main-content">

@@ -17,6 +17,8 @@ import EdgeComputing from './pages/EdgeComputing'
 import FederatedLearning from './pages/FederatedLearning'
 import ARIntegration from './pages/ARIntegration'
 import BlockchainAudit from './pages/BlockchainAudit'
+import DataQualityLineage from './pages/DataQualityLineage'
+import WorkflowAutomation from './pages/WorkflowAutomation'
 import './App.css'
 
 const queryClient = new QueryClient()
@@ -48,6 +50,8 @@ function App() {
             <Route path="/federated-learning" element={<FederatedLearning />} />
             <Route path="/ar-integration" element={<ARIntegration />} />
             <Route path="/blockchain-audit" element={<BlockchainAudit />} />
+            <Route path="/data-quality-lineage" element={<DataQualityLineage />} />
+            <Route path="/workflow-automation" element={<WorkflowAutomation />} />
           </Routes>
         </Layout>
       </Router>

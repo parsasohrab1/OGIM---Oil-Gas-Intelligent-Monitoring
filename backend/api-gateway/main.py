@@ -2,29 +2,39 @@
 API Gateway Service
 Single entry point for all UI and API requests
 """
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
 import uvicorn
-from typing import Optional
+from typing import Optional, Any, Dict
 import logging
 import os
 import sys
+import json
+import asyncio
+from datetime import datetime, timezone
+import ipaddress
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from config import settings
-from security import decode_token
-from metrics import setup_metrics
-from tracing import setup_tracing
-from advanced_rate_limiter import get_rate_limiter, RateLimitConfig
-from mtls_manager import get_mtls_manager
+from shared.config import settings
+from shared.security import decode_token
+from shared.metrics import setup_metrics
+try:
+    from shared.tracing import setup_tracing
+except Exception:  # pragma: no cover - fallback for lean test/runtime environments
+    def setup_tracing(*args, **kwargs):
+        logger.warning("Tracing disabled: OpenTelemetry dependencies unavailable")
+from shared.advanced_rate_limiter import get_rate_limiter, RateLimitConfig
+from shared.mtls_manager import get_mtls_manager
+from shared.threat_detection import siem_logger, threat_detector
 
 app = FastAPI(
     title="OGIM API Gateway",
@@ -94,6 +104,19 @@ SERVICE_ROLE_REQUIREMENTS = {
     "data-variables": {"system_admin", "data_engineer", "field_operator"},
     "storage-optimization": {"system_admin", "data_engineer"},
 }
+upstream_client: Optional[httpx.AsyncClient] = None
+SUSPICIOUS_INPUT_PATTERNS = [
+    re.compile(r"(<\s*script\b|</\s*script\s*>)", re.IGNORECASE),
+    re.compile(r"(onerror\s*=|onload\s*=|javascript:)", re.IGNORECASE),
+    re.compile(r"(\bunion\b\s+\bselect\b|\bdrop\b\s+\btable\b|\binsert\b\s+\binto\b)", re.IGNORECASE),
+    re.compile(r"(\bor\b\s+1\s*=\s*1\b|\band\b\s+1\s*=\s*1\b|--|/\*|\*/)", re.IGNORECASE),
+]
+SAFE_HEADERS_ALLOWLIST = {
+    "accept", "accept-encoding", "accept-language", "authorization", "cache-control",
+    "content-type", "if-none-match", "origin", "referer", "user-agent", "x-correlation-id",
+    "x-request-id", "x-forwarded-for", "x-real-ip",
+}
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 async def authenticate_request(request: Request):
@@ -115,6 +138,145 @@ async def authenticate_request(request: Request):
 
     request.state.user = payload
     return payload
+
+
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if forwarded_for:
+        return forwarded_for
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
+
+
+def _contains_suspicious_content(value: str) -> bool:
+    if not value:
+        return False
+    for pattern in SUSPICIOUS_INPUT_PATTERNS:
+        if pattern.search(value):
+            return True
+    return False
+
+
+def _scan_payload_for_attacks(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        return any(
+            _contains_suspicious_content(str(k)) or _scan_payload_for_attacks(v)
+            for k, v in payload.items()
+        )
+    if isinstance(payload, list):
+        return any(_scan_payload_for_attacks(item) for item in payload)
+    if isinstance(payload, str):
+        return _contains_suspicious_content(payload)
+    return False
+
+
+def _build_security_headers() -> Dict[str, str]:
+    return {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    }
+
+
+async def validate_and_harden_request(request: Request, service_name: str, path: str):
+    """Validate request shape and block suspicious payloads."""
+    if not settings.API_SECURITY_ENABLE_INPUT_HARDENING:
+        return None
+
+    if len(path) > settings.API_SECURITY_MAX_PARAM_LENGTH:
+        raise HTTPException(status_code=414, detail="Request path is too long")
+    if len(request.query_params) > settings.API_SECURITY_MAX_QUERY_PARAMS:
+        raise HTTPException(status_code=400, detail="Too many query parameters")
+
+    for key, value in request.query_params.multi_items():
+        if len(key) > settings.API_SECURITY_MAX_PARAM_LENGTH or len(value) > settings.API_SECURITY_MAX_PARAM_LENGTH:
+            raise HTTPException(status_code=400, detail="Query parameter length exceeded")
+        if _contains_suspicious_content(key) or _contains_suspicious_content(value):
+            siem_logger.emit(
+                "request_blocked_suspicious_query",
+                "high",
+                {"ip": _client_ip(request), "service": service_name, "path": path, "query_key": key},
+            )
+            raise HTTPException(status_code=400, detail="Request contains blocked input patterns")
+
+    body = None
+    if request.method in WRITE_METHODS:
+        body = await request.body()
+        if len(body) > settings.API_SECURITY_MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="Request payload is too large")
+
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type and body:
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Malformed JSON payload")
+            if _scan_payload_for_attacks(parsed):
+                siem_logger.emit(
+                    "request_blocked_suspicious_payload",
+                    "critical",
+                    {"ip": _client_ip(request), "service": service_name, "path": path},
+                )
+                raise HTTPException(status_code=400, detail="Request contains blocked input patterns")
+    return body
+
+
+def _sanitize_forward_headers(request_headers: Dict[str, str]) -> Dict[str, str]:
+    sanitized = {}
+    for key, value in request_headers.items():
+        normalized = key.lower()
+        if normalized in {"host", "content-length", "connection", "transfer-encoding", "upgrade"}:
+            continue
+        if normalized in SAFE_HEADERS_ALLOWLIST or normalized.startswith("x-"):
+            sanitized[key] = value
+    return sanitized
+
+
+def _ip_allowed_in_zero_trust(ip: str) -> bool:
+    networks_raw = settings.ZERO_TRUST_ALLOWED_NETWORKS or ""
+    networks = [n.strip() for n in networks_raw.split(",") if n.strip()]
+    if not networks:
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for cidr in networks:
+        try:
+            if ip_obj in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+async def enforce_zero_trust(request: Request, service_name: str):
+    """Apply zero-trust checks before service proxying."""
+    if not settings.ZERO_TRUST_ENFORCED:
+        return True
+
+    ip = _client_ip(request)
+    if not _ip_allowed_in_zero_trust(ip):
+        siem_logger.emit(
+            "zero_trust_denied_ip",
+            "high",
+            {"ip": ip, "path": request.url.path, "service": service_name},
+        )
+        raise HTTPException(status_code=403, detail="Access denied by zero trust policy")
+
+    user = getattr(request.state, "user", {}) or {}
+    role = user.get("role")
+    if not role:
+        siem_logger.emit(
+            "zero_trust_missing_role",
+            "high",
+            {"ip": ip, "path": request.url.path, "service": service_name},
+        )
+        raise HTTPException(status_code=401, detail="Role is required by zero trust policy")
+    return True
 
 
 async def check_rate_limit(request: Request, service_name: str):
@@ -165,6 +327,30 @@ async def check_rate_limit(request: Request, service_name: str):
     
     # Add rate limit headers to response
     request.state.rate_limit_info = info
+
+    # Extra endpoint-level guard to reduce abuse on hot paths.
+    endpoint_key = f"{service_name}:{request.method}:{request.url.path}"
+    endpoint_limit = max(5, int(limit_config["max_requests"] * 0.5)) if request.method in WRITE_METHODS else limit_config["max_requests"]
+    endpoint_allowed, endpoint_info = await rate_limiter.check_rate_limit(
+        identifier=identifier,
+        endpoint=endpoint_key,
+        max_requests=endpoint_limit,
+        window_seconds=limit_config["window_seconds"],
+        strategy=settings.RATE_LIMIT_STRATEGY,
+    )
+    if not endpoint_allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Endpoint rate limit exceeded. Please try again later.",
+            headers={
+                "X-RateLimit-Limit": str(endpoint_limit),
+                "X-RateLimit-Remaining": str(endpoint_info.get("remaining", 0)),
+                "X-RateLimit-Reset": str(endpoint_info.get("reset", 0)),
+                "Retry-After": str(limit_config["window_seconds"]),
+            },
+        )
+
+    request.state.endpoint_rate_limit_info = endpoint_info
     return True
 
 
@@ -184,17 +370,141 @@ async def health():
     return {"status": "healthy"}
 
 
+async def _fetch_realtime_snapshot() -> Dict[str, Any]:
+    """
+    Collect a lightweight snapshot for realtime transport.
+    Errors are isolated so one upstream outage doesn't break the stream.
+    """
+    sensor_records = []
+    open_alerts = {"count": 0, "alerts": []}
+
+    client = upstream_client
+    if client is None:
+        timeout = httpx.Timeout(5.0, connect=2.0)
+        client = httpx.AsyncClient(timeout=timeout)
+    try:
+        sensor_res = await client.get(f"{SERVICES['data-ingestion']}/sensor-data", params={"limit": 20})
+        if sensor_res.is_success:
+            sensor_records = sensor_res.json().get("records", [])
+    except Exception as exc:
+        logger.debug("Realtime sensor fetch failed: %s", exc)
+
+    try:
+        alert_res = await client.get(f"{SERVICES['alert']}/alerts", params={"status": "open"})
+        if alert_res.is_success:
+            open_alerts = alert_res.json()
+    except Exception as exc:
+        logger.debug("Realtime alert fetch failed: %s", exc)
+
+    return {
+        "type": "snapshot",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data": {
+            "sensor_records": sensor_records,
+            "alerts": open_alerts,
+        },
+    }
+
+
+@app.websocket("/stream/realtime/ws")
+async def realtime_websocket(
+    websocket: WebSocket,
+    token: str = Query(default="")
+):
+    """Low-latency realtime stream over WebSocket."""
+    if not token:
+        await websocket.close(code=1008, reason="Missing token")
+        return
+
+    try:
+        decode_token(token)
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid token")
+        return
+
+    await websocket.accept()
+    logger.info("Realtime WebSocket connected")
+
+    async def sender_loop() -> None:
+        while True:
+            snapshot = await _fetch_realtime_snapshot()
+            await websocket.send_json(snapshot)
+            await asyncio.sleep(1.0)
+
+    try:
+        await sender_loop()
+    except WebSocketDisconnect:
+        logger.info("Realtime WebSocket disconnected")
+    except Exception as exc:
+        logger.warning("Realtime WebSocket error: %s", exc)
+        try:
+            await websocket.close(code=1011, reason="Internal stream error")
+        except Exception:
+            pass
+
+
+@app.get("/stream/realtime/sse")
+async def realtime_sse(token: str):
+    """Realtime stream fallback over Server-Sent Events."""
+    try:
+        decode_token(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+
+    async def event_generator():
+        while True:
+            snapshot = await _fetch_realtime_snapshot()
+            # SSE format: event + data + blank line.
+            yield f"event: snapshot\ndata: {json.dumps(snapshot)}\n\n"
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.on_event("startup")
+async def startup_gateway():
+    global upstream_client
+    limits = httpx.Limits(
+        max_keepalive_connections=settings.API_GATEWAY_HTTP_KEEPALIVE_CONNECTIONS,
+        max_connections=settings.API_GATEWAY_HTTP_MAX_CONNECTIONS,
+    )
+    timeout = httpx.Timeout(
+        settings.API_GATEWAY_UPSTREAM_TIMEOUT_SECONDS,
+        connect=3.0,
+    )
+    upstream_client = httpx.AsyncClient(limits=limits, timeout=timeout)
+    logger.info("Upstream HTTP client initialized with pooled connections")
+
+
+@app.on_event("shutdown")
+async def shutdown_gateway():
+    global upstream_client
+    if upstream_client is not None:
+        await upstream_client.aclose()
+        upstream_client = None
+
+
 @app.api_route("/api/{service_name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy_request(
     service_name: str,
     path: str,
     request: Request,
     token: str = Depends(authenticate_request),
-    _: bool = Depends(lambda r, s=service_name: check_rate_limit(r, s))
 ):
     """Proxy requests to backend services"""
     if service_name not in SERVICES:
         raise HTTPException(status_code=404, detail=f"Service {service_name} not found")
+
+    await check_rate_limit(request, service_name)
+    await enforce_zero_trust(request, service_name)
     
     # Determine protocol (https if mTLS enabled, otherwise http)
     protocol = "https" if (settings.MTLS_ENABLED and mtls_manager.mtls_enabled) else "http"
@@ -220,33 +530,40 @@ async def proxy_request(
     
     # Forward query parameters
     params = dict(request.query_params)
-    
-    # Forward body for POST/PUT/PATCH
-    body = None
-    if request.method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-    
+
+    body = await validate_and_harden_request(request, service_name, path)
+
     # Forward headers
-    headers = dict(request.headers)
-    headers.pop("host", None)
-    headers.pop("content-length", None)
+    headers = _sanitize_forward_headers(dict(request.headers))
     
-    # Get mTLS configuration if enabled
-    client_kwargs = {}
-    if settings.MTLS_ENABLED and mtls_manager.mtls_enabled:
-        client_kwargs = mtls_manager.get_httpx_client_kwargs(
-            verify=settings.MTLS_VERIFY_SERVER
-        )
-    
+    # Get mTLS configuration if enabled; fallback to one-shot client for that path.
+    use_dedicated_mtls_client = settings.MTLS_ENABLED and mtls_manager.mtls_enabled
+
     try:
-        async with httpx.AsyncClient(**client_kwargs) as client:
+        if use_dedicated_mtls_client:
+            client_kwargs = mtls_manager.get_httpx_client_kwargs(
+                verify=settings.MTLS_VERIFY_SERVER
+            )
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                response = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    params=params,
+                    content=body,
+                    headers=headers,
+                    timeout=settings.API_GATEWAY_UPSTREAM_TIMEOUT_SECONDS,
+                )
+        else:
+            client = upstream_client
+            if client is None:
+                raise HTTPException(status_code=503, detail="Gateway upstream client unavailable")
             response = await client.request(
                 method=request.method,
                 url=target_url,
                 params=params,
                 content=body,
                 headers=headers,
-                timeout=30.0
+                timeout=settings.API_GATEWAY_UPSTREAM_TIMEOUT_SECONDS,
             )
     except httpx.TimeoutException:
         logger.error("Timeout while proxying request to %s", service_name)
@@ -254,6 +571,42 @@ async def proxy_request(
     except httpx.RequestError as e:
         logger.error("Error proxying to %s: %s", service_name, e)
         raise HTTPException(status_code=502, detail=f"Service {service_name} unavailable")
+
+    risk_score, reasons = threat_detector.evaluate(
+        ip=_client_ip(request),
+        user=(request.state.user or {}).get("sub") if hasattr(request.state, "user") else None,
+        path=request.url.path,
+        method=request.method,
+        status_code=response.status_code,
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    if risk_score >= settings.THREAT_BLOCK_THRESHOLD:
+        siem_logger.emit(
+            "threat_detected_blocked",
+            "critical",
+            {
+                "ip": _client_ip(request),
+                "path": request.url.path,
+                "method": request.method,
+                "service": service_name,
+                "risk_score": risk_score,
+                "reasons": reasons,
+            },
+        )
+        raise HTTPException(status_code=403, detail="Request blocked by threat detection policy")
+    elif risk_score >= 40:
+        siem_logger.emit(
+            "threat_detected_warning",
+            "medium",
+            {
+                "ip": _client_ip(request),
+                "path": request.url.path,
+                "method": request.method,
+                "service": service_name,
+                "risk_score": risk_score,
+                "reasons": reasons,
+            },
+        )
 
     content_type = response.headers.get("content-type", "")
     response_body: Optional[object]
@@ -277,8 +630,17 @@ async def proxy_request(
         response_headers.update({
             "X-RateLimit-Limit": str(info.get("limit", 0)),
             "X-RateLimit-Remaining": str(info.get("remaining", 0)),
-            "X-RateLimit-Reset": str(info.get("reset", 0))
+            "X-RateLimit-Reset": str(info.get("reset", 0)),
+            "X-Threat-Risk-Score": str(risk_score),
         })
+    if hasattr(request.state, "endpoint_rate_limit_info"):
+        endpoint_info = request.state.endpoint_rate_limit_info
+        response_headers.update({
+            "X-Endpoint-RateLimit-Limit": str(endpoint_info.get("limit", 0)),
+            "X-Endpoint-RateLimit-Remaining": str(endpoint_info.get("remaining", 0)),
+            "X-Endpoint-RateLimit-Reset": str(endpoint_info.get("reset", 0)),
+        })
+    response_headers.update(_build_security_headers())
     
     if isinstance(response_body, (dict, list)):
         return JSONResponse(

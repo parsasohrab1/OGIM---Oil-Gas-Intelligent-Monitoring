@@ -151,6 +151,63 @@ export const reportingAPI = {
   getReport: async (reportId: string) => {
     const response = await apiClient.get(`/api/reporting/reports/${reportId}`)
     return response.data
+  },
+  generateDataQualityLineage: async (request?: { well_name?: string; lookback_hours?: number }) => {
+    const response = await apiClient.post('/api/reporting/reports/data-quality-lineage', request || {})
+    return response.data
+  },
+  generateAutoDataQualityLineage: async (request?: { well_name?: string; lookback_hours?: number }) => {
+    const response = await apiClient.post('/api/reporting/reports/data-quality-lineage/auto', request || {})
+    return response.data
+  },
+  getAutoDataQualityLineageReports: async (limit: number = 20) => {
+    const response = await apiClient.get('/api/reporting/reports/data-quality-lineage/auto', { params: { limit } })
+    return response.data
+  },
+  runReportBuilder: async (request: {
+    name: string
+    well_name?: string
+    lookback_hours?: number
+    dimensions: string[]
+    measures: string[]
+    filters?: Record<string, any>
+    limit?: number
+  }) => {
+    const response = await apiClient.post('/api/reporting/reports/builder', request)
+    return response.data
+  },
+  getBIMetadata: async () => {
+    const response = await apiClient.get('/api/reporting/bi/metadata')
+    return response.data
+  },
+  getBIConnectors: async () => {
+    const response = await apiClient.get('/api/reporting/bi/connectors')
+    return response.data
+  },
+  createWorkflow: async (request: {
+    name: string
+    description?: string
+    schedule_minutes?: number
+    steps: Array<{ id: string; type: string; config: Record<string, any>; depends_on?: string[] }>
+  }) => {
+    const response = await apiClient.post('/api/reporting/workflows', request)
+    return response.data
+  },
+  listWorkflows: async () => {
+    const response = await apiClient.get('/api/reporting/workflows')
+    return response.data
+  },
+  runWorkflow: async (workflowId: string, input?: Record<string, any>) => {
+    const response = await apiClient.post(`/api/reporting/workflows/${workflowId}/run`, { input: input || {} })
+    return response.data
+  },
+  getWorkflowRuns: async (workflowId: string, limit: number = 20) => {
+    const response = await apiClient.get(`/api/reporting/workflows/${workflowId}/runs`, { params: { limit } })
+    return response.data
+  },
+  getWorkflowStepTypes: async () => {
+    const response = await apiClient.get('/api/reporting/workflows/visual-builder/step-types')
+    return response.data
   }
 }
 
@@ -223,6 +280,19 @@ export const digitalTwinAPI = {
   
   getSimulations: async (params?: { well_name?: string }) => {
     const response = await apiClient.get('/api/digital-twin/simulations', { params })
+    return response.data
+  },
+  runWhatIfScenario: async (request: {
+    well_name: string
+    base_conditions: { flow_rate: number; pressure: number; temperature: number }
+    adjustments: { choke_pct?: number; pump_speed_pct?: number; injection_pct?: number }
+    horizon_hours?: number
+  }) => {
+    const response = await apiClient.post('/api/digital-twin/what-if', request)
+    return response.data
+  },
+  getAROverlay: async (wellName: string) => {
+    const response = await apiClient.get(`/api/digital-twin/ar/overlay/${wellName}`)
     return response.data
   }
 }

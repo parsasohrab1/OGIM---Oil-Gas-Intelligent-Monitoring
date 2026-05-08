@@ -12,6 +12,16 @@
 
 ```yaml
 services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.110.0
+    ports:
+      - "4317:4317" # OTLP gRPC
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    ports:
+      - "3200:3200"
+
   prometheus:
     image: prom/prometheus:latest
     volumes:
@@ -24,6 +34,14 @@ services:
     ports:
       - "3001:3000"
 ```
+
+فایل‌های production-ready برای این استک در پروژه اضافه شده‌اند:
+
+- `infrastructure/otel/otel-collector-config.yaml`
+- `infrastructure/tempo/tempo.yaml`
+- `infrastructure/grafana/provisioning/datasources/datasources.yaml`
+- `infrastructure/grafana/provisioning/dashboards/dashboards.yaml`
+- `infrastructure/grafana/provisioning/dashboards/json/ogim-apm-overview.json`
 
 ## 2. پیکربندی Prometheus
 
@@ -80,6 +98,7 @@ histogram_quantile(0.95, sum(rate(service_request_latency_seconds_bucket{service
 
 ## 6. Tracing (OpenTelemetry)
 - تمام سرویس‌ها با `setup_tracing` پیکربندی شده‌اند؛ برای فعال‌سازی، متغیر `OTEL_EXPORTER_OTLP_ENDPOINT` را تنظیم کنید.
+- در `infrastructure/docker/docker-compose.yml` این مقدار به شکل پیش‌فرض روی `http://otel-collector:4317` تنظیم شده است.
 - نمونه تنظیمات و استقرار Jaeger در [`docs/TRACING.md`](TRACING.md) موجود است.
 - API Gateway به صورت خودکار context را به سرویس‌های پایین‌دست منتقل می‌کند.
 
@@ -92,6 +111,12 @@ histogram_quantile(0.95, sum(rate(service_request_latency_seconds_bucket{service
 - در pipeline استقرار، پس از deploy سرویس‌ها، Prometheus/Grafana را reload کنید (یا از Kubernetes ServiceMonitor استفاده کنید).
 - آدرس و نحوه دسترسی داشبوردها و ابزار tracing را در Runbook عملیاتی ثبت کنید.
 - برای تیم Ops، سقف‌های هشدار (threshold) و اقدامات پاسخ را در Runbook اضافه کنید.
+
+## 9. SIEM & Threat Detection
+- رخدادهای امنیتی با prefix `SIEM_EVENT` در لاگ سرویس‌ها emit می‌شوند (فرمت JSON).
+- در صورت تنظیم `SIEM_OUTPUT_FILE`، رخدادها به فایل newline-delimited JSON نیز نوشته می‌شوند.
+- سیاست Zero Trust در gateway با `ZERO_TRUST_ENFORCED=true` و `ZERO_TRUST_ALLOWED_NETWORKS` فعال می‌شود.
+- threat scoring با `THREAT_BLOCK_THRESHOLD` کنترل می‌شود؛ درخواست‌های پرخطر در gateway بلاک می‌شوند.
 
 با این ساختار می‌توانید روند سلامت سرویس‌ها را رصد و هشدارهای اولیه را مدیریت کنید.
 

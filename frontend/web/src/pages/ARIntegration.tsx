@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { digitalTwinAPI } from '../api/services'
 import './ARIntegration.css'
 
 interface ARDevice {
@@ -175,6 +176,24 @@ export default function ARIntegration() {
 
   const selectedDeviceData = arDevices.find(d => d.deviceId === selectedDevice)
 
+  const { data: arOverlayData } = useQuery({
+    queryKey: ['ar-overlay', selectedWell],
+    queryFn: () => digitalTwinAPI.getAROverlay(selectedWell),
+    refetchInterval: 5000
+  })
+
+  const { data: whatIfResult } = useQuery({
+    queryKey: ['ar-what-if', selectedWell],
+    queryFn: () =>
+      digitalTwinAPI.runWhatIfScenario({
+        well_name: selectedWell,
+        base_conditions: { flow_rate: 840, pressure: 2450, temperature: 84 },
+        adjustments: { choke_pct: -5, pump_speed_pct: 6 },
+        horizon_hours: 12
+      }),
+    refetchInterval: 20000
+  })
+
   return (
     <div className="ar-integration-page">
       <div className="page-header">
@@ -284,6 +303,16 @@ export default function ARIntegration() {
         </div>
       </div>
 
+      {selectedDeviceData && (
+        <div className="bim-components-section">
+          <h2>Selected Device Context</h2>
+          <p>
+            <strong>{selectedDeviceData.deviceId}</strong> ({selectedDeviceData.deviceType}) operated by{' '}
+            <strong>{selectedDeviceData.user}</strong> at <strong>{selectedDeviceData.location}</strong>.
+          </p>
+        </div>
+      )}
+
       <div className="bim-components-section">
         <h2>3D BIM Components - {selectedWell}</h2>
         <div className="well-selector">
@@ -340,6 +369,20 @@ export default function ARIntegration() {
             </LineChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      <div className="bim-components-section">
+        <h2>AR Overlay Payload (Live from Digital Twin)</h2>
+        <pre style={{ maxHeight: 220, overflow: 'auto', background: '#f8f8f8', padding: '10px' }}>
+          {JSON.stringify(arOverlayData || {}, null, 2)}
+        </pre>
+      </div>
+
+      <div className="bim-components-section">
+        <h2>What-if Scenario (Digital Twin)</h2>
+        <pre style={{ maxHeight: 220, overflow: 'auto', background: '#f8f8f8', padding: '10px' }}>
+          {JSON.stringify(whatIfResult || {}, null, 2)}
+        </pre>
       </div>
     </div>
   )

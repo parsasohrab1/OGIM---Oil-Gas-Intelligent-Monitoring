@@ -36,6 +36,7 @@ from token_store import refresh_token_store
 from security_alerts import security_alerts
 from metrics import setup_metrics
 from tracing import setup_tracing
+from threat_detection import siem_logger, threat_detector
 
 # Setup logging
 logger = setup_logging("auth-service")
@@ -159,6 +160,23 @@ async def login(
     if not user or not verify_password(form_data.password, user.hashed_password):
         logger.warning(f"Failed login attempt for user: {form_data.username}")
         security_alerts.record_login_failure(form_data.username)
+        risk_score, reasons = threat_detector.evaluate(
+            ip="unknown",
+            user=form_data.username,
+            path="/token",
+            method="POST",
+            status_code=401,
+            user_agent="",
+        )
+        siem_logger.emit(
+            "auth_failed_login",
+            "high" if risk_score >= 60 else "medium",
+            {
+                "username": form_data.username,
+                "risk_score": risk_score,
+                "reasons": reasons,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -180,6 +198,14 @@ async def login(
     expires_at = datetime.utcfromtimestamp(refresh_payload["exp"])
     refresh_token_store.register_token(refresh_jti, expires_at)
     security_alerts.reset_user(user.username)
+    siem_logger.emit(
+        "auth_login_success",
+        "low",
+        {
+            "username": user.username,
+            "role": user.role,
+        },
+    )
     
     logger.info(f"User logged in: {user.username}")
     
@@ -226,6 +252,11 @@ async def refresh_token(
         if old_jti:
             refresh_token_store.revoke_token(old_jti, datetime.utcfromtimestamp(payload["exp"]))
         refresh_token_store.register_token(new_jti, new_exp)
+        siem_logger.emit(
+            "auth_token_refresh",
+            "low",
+            {"username": user.username, "old_jti": old_jti, "new_jti": new_jti},
+        )
         
         return {
             "access_token": new_access_token,

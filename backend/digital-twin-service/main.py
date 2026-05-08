@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Dict, Optional, List, Any
 from datetime import datetime
 import time
+import random
 import uvicorn
 import sys
 import os
@@ -98,7 +99,15 @@ class BIM3DScene(BaseModel):
     timestamp: datetime
 
 
+class WhatIfScenarioRequest(BaseModel):
+    well_name: str
+    base_conditions: Dict[str, float]
+    adjustments: Dict[str, float]  # e.g. {"choke_pct": -10, "pump_speed_pct": +5}
+    horizon_hours: int = 24
+
+
 simulations_db = []
+_well_3d_cache: Dict[str, Dict[str, Any]] = {}
 
 
 @app.post("/simulate", response_model=SimulationResponse)
@@ -174,7 +183,11 @@ async def get_well_3d_data(
     Returns data organized by depth segments for 3D rendering
     """
     from models import SensorData, Tag
-    import random
+    cache_ttl = max(1, settings.CACHE_TTL_SECONDS)
+    cached = _well_3d_cache.get(well_name)
+    now_ts = time.time()
+    if cached and cached["expires_at"] > now_ts:
+        return cached["data"]
     
     # Get all tags for this well
     tags = db.query(Tag).filter(Tag.well_name == well_name).all()
@@ -230,16 +243,25 @@ async def get_well_3d_data(
                     elif 'flow' in tag.sensor_type.lower():
                         flow_rate = latest.value
         
-        return {
+        result = {
             "wellName": well_name,
             "totalDepth": total_depth,
             "depthData": depth_data,
+            "trajectory": {
+                "md_points": [{"md": i * 150, "inclination": round(5 + i * 0.8, 2), "azimuth": round((i * 11) % 360, 2)} for i in range(20)]
+            },
+            "riskZones": [
+                {"name": "High pressure zone", "fromDepth": 2300, "toDepth": 2800, "severity": "warning"},
+                {"name": "Thermal hotspot", "fromDepth": 2700, "toDepth": 3000, "severity": "critical"},
+            ],
             "surfaceData": {
                 "wellheadPressure": round(wellhead_pressure, 2),
                 "wellheadTemperature": round(wellhead_temperature, 1),
                 "flowRate": round(flow_rate, 2)
             }
         }
+        _well_3d_cache[well_name] = {"expires_at": now_ts + cache_ttl, "data": result}
+        return result
     
     # Calculate total depth from tags (assume max depth from location metadata)
     total_depth = 3000  # Default, could be from well metadata
@@ -337,16 +359,25 @@ async def get_well_3d_data(
             elif 'flow' in tag.sensor_type.lower():
                 flow_rate = latest.value
     
-    return {
+    result = {
         "wellName": well_name,
         "totalDepth": total_depth,
         "depthData": depth_data,
+        "trajectory": {
+            "md_points": [{"md": i * 150, "inclination": round(3 + i * 0.7, 2), "azimuth": round((i * 9) % 360, 2)} for i in range(20)]
+        },
+        "riskZones": [
+            {"name": "Scale risk", "fromDepth": 1500, "toDepth": 1900, "severity": "warning"},
+            {"name": "Gas breakthrough risk", "fromDepth": 2400, "toDepth": 2900, "severity": "critical"},
+        ],
         "surfaceData": {
             "wellheadPressure": round(wellhead_pressure, 2),
             "wellheadTemperature": round(wellhead_temperature, 1),
             "flowRate": round(flow_rate, 2)
         }
     }
+    _well_3d_cache[well_name] = {"expires_at": now_ts + cache_ttl, "data": result}
+    return result
 
 
 @app.get("/wells")
@@ -496,6 +527,102 @@ async def get_model_state(
     )
     
     return state
+
+
+@app.post("/what-if")
+async def run_what_if_scenario(
+    request: WhatIfScenarioRequest,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """
+    Run what-if scenario on top of current base conditions.
+    Returns projected KPI deltas and risk summary.
+    """
+    base_flow = request.base_conditions.get("flow_rate", 800.0)
+    base_pressure = request.base_conditions.get("pressure", 2400.0)
+    base_temp = request.base_conditions.get("temperature", 85.0)
+
+    choke_adj = request.adjustments.get("choke_pct", 0.0)
+    pump_adj = request.adjustments.get("pump_speed_pct", 0.0)
+    inj_adj = request.adjustments.get("injection_pct", 0.0)
+
+    projected_flow = base_flow * (1 + (pump_adj * 0.006) - (choke_adj * 0.002))
+    projected_pressure = base_pressure * (1 + (choke_adj * 0.003) + (inj_adj * 0.002))
+    projected_temp = base_temp * (1 + (pump_adj * 0.0015))
+
+    production_gain_pct = ((projected_flow - base_flow) / max(base_flow, 1.0)) * 100
+    integrity_risk = "low"
+    if projected_pressure > 2800 or projected_temp > 105:
+        integrity_risk = "high"
+    elif projected_pressure > 2550 or projected_temp > 95:
+        integrity_risk = "medium"
+
+    scenario_id = f"WIF-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+    result = {
+        "scenario_id": scenario_id,
+        "well_name": request.well_name,
+        "horizon_hours": request.horizon_hours,
+        "base": {
+            "flow_rate": round(base_flow, 2),
+            "pressure": round(base_pressure, 2),
+            "temperature": round(base_temp, 2),
+        },
+        "projected": {
+            "flow_rate": round(projected_flow, 2),
+            "pressure": round(projected_pressure, 2),
+            "temperature": round(projected_temp, 2),
+            "production_gain_pct": round(production_gain_pct, 2),
+            "integrity_risk": integrity_risk,
+        },
+        "recommendations": [
+            "Reduce choke adjustment if integrity risk is medium/high." if integrity_risk != "low" else "Scenario is operationally acceptable.",
+            "Monitor pressure transient in first 2 hours after applying setpoints.",
+        ],
+        "timeline": [
+            {
+                "hour": h,
+                "flow_rate": round(projected_flow * (1 + random.uniform(-0.015, 0.015)), 2),
+                "pressure": round(projected_pressure * (1 + random.uniform(-0.01, 0.01)), 2),
+                "temperature": round(projected_temp * (1 + random.uniform(-0.008, 0.008)), 2),
+            }
+            for h in range(0, max(1, request.horizon_hours) + 1, 2)
+        ],
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    return result
+
+
+@app.get("/ar/overlay/{well_name}")
+async def get_ar_overlay_payload(
+    well_name: str,
+    _: Dict[str, Any] = Depends(require_authentication)
+):
+    """Provide AR-friendly overlay payload with prioritized assets and labels."""
+    return {
+        "well_name": well_name,
+        "anchors": [
+            {"id": "wellhead_anchor", "position": {"x": 0, "y": 0, "z": 0}},
+            {"id": "tree_anchor", "position": {"x": 0.2, "y": 2.0, "z": 0}},
+        ],
+        "overlay_components": [
+            {
+                "component_id": "PUMP-001",
+                "label": "Main Production Pump",
+                "status": "normal",
+                "kpis": {"pressure": 2480, "temperature": 84, "flowRate": 845},
+                "priority": 1,
+            },
+            {
+                "component_id": "VALVE-003",
+                "label": "Master Valve",
+                "status": "warning",
+                "kpis": {"pressure": 2620},
+                "priority": 2,
+            },
+        ],
+        "recommended_view": {"distance_m": 2.5, "yaw_deg": 35, "pitch_deg": -5},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
 
 @app.get("/health")

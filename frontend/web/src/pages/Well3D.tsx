@@ -67,6 +67,10 @@ interface Well3DData {
     wellheadTemperature: number
     flowRate: number
   }
+  trajectory?: {
+    md_points: Array<{ md: number; inclination: number; azimuth: number }>
+  }
+  riskZones?: Array<{ name: string; fromDepth: number; toDepth: number; severity: 'warning' | 'critical' }>
   bop?: BOPData
   casings?: CasingData[]
   wellheadEquipment?: WellheadEquipment
@@ -1013,6 +1017,23 @@ export default function Well3D() {
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {displayData.riskZones && displayData.riskZones.length > 0 && (
+          <div className="legend-section">
+            <h3>Risk Zones</h3>
+            {displayData.riskZones.map((zone, idx) => (
+              <div key={idx} className="legend-item">
+                <div
+                  className="legend-color"
+                  style={{ background: zone.severity === 'critical' ? '#ff0000' : '#ffaa00' }}
+                ></div>
+                <span>
+                  {zone.name}: {zone.fromDepth}m - {zone.toDepth}m
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>
