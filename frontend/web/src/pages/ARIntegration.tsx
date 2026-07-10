@@ -111,11 +111,27 @@ export default function ARIntegration() {
     refetchInterval: 5000
   })
 
-  // Mock data for BIM components
+  // Mock data for BIM components — use digital twin BIM scene when available
   const { data: bimComponents = [] } = useQuery({
     queryKey: ['bim-components', selectedWell],
     queryFn: async () => {
-      await new Promise(resolve => setTimeout(resolve, 500))
+      try {
+        const scene = await digitalTwinAPI.getBimScene(selectedWell)
+        const models = scene?.models || scene?.components || []
+        if (models.length) {
+          return models.map((m: any) => ({
+            componentId: m.model_id || m.id,
+            name: m.name || m.label,
+            type: (m.type || 'sensor') as BIMComponent['type'],
+            location: m.location || m.zone || '—',
+            status: (m.status || 'normal') as BIMComponent['status'],
+            realTimeData: m.real_time_data || m.sensors || {},
+          })) as BIMComponent[]
+        }
+      } catch {
+        // fall through to mock
+      }
+      await new Promise(resolve => setTimeout(resolve, 300))
       return [
         {
           componentId: 'PUMP-001',

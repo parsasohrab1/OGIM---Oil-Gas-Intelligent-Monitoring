@@ -73,3 +73,26 @@ def test_get_report_by_id(client):
     response = client.get(f"/reports/{report_id}")
     assert response.status_code == 200
     assert response.json()["report_id"] == report_id
+
+
+def test_workflow_templates(client):
+    response = client.get("/workflows/templates")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["templates"]) >= 1
+    assert "daily-dq-report" in [t["template_id"] for t in body["templates"]]
+
+
+def test_bi_metadata(client):
+    response = client.get("/bi/metadata")
+    assert response.status_code == 200
+    assert "dimensions" in response.json()
+    assert "measures" in response.json()
+
+
+def test_bi_connectors(client):
+    response = client.get("/bi/connectors")
+    assert response.status_code == 200
+    body = response.json()
+    assert "power_bi" in body
+    assert "tableau" in body

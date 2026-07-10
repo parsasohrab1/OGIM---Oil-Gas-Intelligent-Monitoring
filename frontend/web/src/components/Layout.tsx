@@ -114,10 +114,34 @@ export default function Layout({ children }: LayoutProps) {
             Blockchain Audit
           </Link>
           <Link
+            to="/report-builder"
+            className={location.pathname === '/report-builder' ? 'active' : ''}
+          >
+            Report Builder
+          </Link>
+          <Link
+            to="/security"
+            className={location.pathname === '/security' ? 'active' : ''}
+          >
+            Security
+          </Link>
+          <Link
+            to="/ml-models"
+            className={location.pathname === '/ml-models' ? 'active' : ''}
+          >
+            ML Models
+          </Link>
+          <Link
             to="/data-quality-lineage"
             className={location.pathname === '/data-quality-lineage' ? 'active' : ''}
           >
             Data Quality
+          </Link>
+          <Link
+            to="/performance"
+            className={location.pathname === '/performance' ? 'active' : ''}
+          >
+            APM
           </Link>
           <Link
             to="/workflow-automation"

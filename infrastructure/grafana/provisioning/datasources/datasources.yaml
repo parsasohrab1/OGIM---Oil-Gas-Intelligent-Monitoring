@@ -15,10 +15,6 @@ datasources:
     editable: true
     jsonData:
       httpMethod: GET
-      tracesToLogsV2:
-        datasourceUid: loki
-        spanStartTimeShift: "-5m"
-        spanEndTimeShift: "5m"
       tracesToMetrics:
         datasourceUid: prometheus
 

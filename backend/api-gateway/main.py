@@ -16,7 +16,7 @@ import json
 import asyncio
 from datetime import datetime, timezone
 import ipaddress
-import re
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,6 +35,9 @@ except Exception:  # pragma: no cover - fallback for lean test/runtime environme
 from shared.advanced_rate_limiter import get_rate_limiter, RateLimitConfig
 from shared.mtls_manager import get_mtls_manager
 from shared.threat_detection import siem_logger, threat_detector
+from shared.input_validation import contains_suspicious_content, scan_payload_for_attacks
+from shared.response_cache import TTLResponseCache
+from shared.kpi_metrics import get_executive_summary, record_latency, record_uptime_check
 
 app = FastAPI(
     title="OGIM API Gateway",
@@ -105,12 +108,16 @@ SERVICE_ROLE_REQUIREMENTS = {
     "storage-optimization": {"system_admin", "data_engineer"},
 }
 upstream_client: Optional[httpx.AsyncClient] = None
-SUSPICIOUS_INPUT_PATTERNS = [
-    re.compile(r"(<\s*script\b|</\s*script\s*>)", re.IGNORECASE),
-    re.compile(r"(onerror\s*=|onload\s*=|javascript:)", re.IGNORECASE),
-    re.compile(r"(\bunion\b\s+\bselect\b|\bdrop\b\s+\btable\b|\binsert\b\s+\binto\b)", re.IGNORECASE),
-    re.compile(r"(\bor\b\s+1\s*=\s*1\b|\band\b\s+1\s*=\s*1\b|--|/\*|\*/)", re.IGNORECASE),
-]
+response_cache = TTLResponseCache(
+    default_ttl_seconds=settings.CACHE_TTL_SECONDS,
+    max_entries=settings.CACHE_MAX_ENTRIES,
+)
+CACHEABLE_GET_PREFIXES = (
+    "/api/reporting/bi/metadata",
+    "/api/reporting/workflows/templates",
+    "/api/digital-twin/wells",
+    "/api/tag-catalog/tags",
+)
 SAFE_HEADERS_ALLOWLIST = {
     "accept", "accept-encoding", "accept-language", "authorization", "cache-control",
     "content-type", "if-none-match", "origin", "referer", "user-agent", "x-correlation-id",
@@ -151,25 +158,11 @@ def _client_ip(request: Request) -> str:
 
 
 def _contains_suspicious_content(value: str) -> bool:
-    if not value:
-        return False
-    for pattern in SUSPICIOUS_INPUT_PATTERNS:
-        if pattern.search(value):
-            return True
-    return False
+    return contains_suspicious_content(value)
 
 
 def _scan_payload_for_attacks(payload: Any) -> bool:
-    if isinstance(payload, dict):
-        return any(
-            _contains_suspicious_content(str(k)) or _scan_payload_for_attacks(v)
-            for k, v in payload.items()
-        )
-    if isinstance(payload, list):
-        return any(_scan_payload_for_attacks(item) for item in payload)
-    if isinstance(payload, str):
-        return _contains_suspicious_content(payload)
-    return False
+    return scan_payload_for_attacks(payload)
 
 
 def _build_security_headers() -> Dict[str, str]:
@@ -364,10 +357,46 @@ async def root():
     }
 
 
+@app.get("/kpi/summary")
+async def kpi_summary():
+    """Executive KPI summary: latency, uptime, adoption, false-positive rate."""
+    record_uptime_check(True)
+    return get_executive_summary()
+
+
+@app.get("/kpi/cache-stats")
+async def kpi_cache_stats():
+    """Response cache statistics for performance tuning."""
+    return response_cache.stats()
+
+
 @app.get("/health")
 async def health():
     """Health check"""
     return {"status": "healthy"}
+
+
+@app.get("/security/siem/events")
+async def get_siem_events(limit: int = 50, severity: Optional[str] = None):
+    """Return recent SIEM security events for the Security Center dashboard."""
+    return {
+        "events": siem_logger.recent_events(limit=min(limit, 200), severity=severity),
+        "summary": siem_logger.summary(),
+    }
+
+
+@app.get("/security/threat/status")
+async def get_threat_status():
+    """Expose zero-trust and threat-detection configuration status."""
+    return {
+        "zero_trust_enforced": settings.ZERO_TRUST_ENFORCED,
+        "zero_trust_networks": [
+            n.strip() for n in (settings.ZERO_TRUST_ALLOWED_NETWORKS or "").split(",") if n.strip()
+        ],
+        "threat_block_threshold": settings.THREAT_BLOCK_THRESHOLD,
+        "api_security_hardening": settings.API_SECURITY_ENABLE_INPUT_HARDENING,
+        "siem_summary": siem_logger.summary(),
+    }
 
 
 async def _fetch_realtime_snapshot() -> Dict[str, Any]:
@@ -535,6 +564,23 @@ async def proxy_request(
 
     # Forward headers
     headers = _sanitize_forward_headers(dict(request.headers))
+
+    full_path = f"/api/{service_name}/{path}"
+    user_sub = (request.state.user or {}).get("sub", "") if hasattr(request.state, "user") else ""
+    cache_key = None
+    if request.method == "GET" and any(full_path.startswith(p) for p in CACHEABLE_GET_PREFIXES):
+        query_str = str(request.url.query or "")
+        cache_key = response_cache.build_key("GET", full_path, query_str, user_sub)
+        cached = response_cache.get(cache_key)
+        if cached is not None:
+            record_latency(service_name, 0.001)
+            return JSONResponse(
+                status_code=200,
+                content=cached,
+                headers={**_build_security_headers(), "X-Cache": "HIT"},
+            )
+
+    started = time.perf_counter()
     
     # Get mTLS configuration if enabled; fallback to one-shot client for that path.
     use_dedicated_mtls_client = settings.MTLS_ENABLED and mtls_manager.mtls_enabled
@@ -570,7 +616,11 @@ async def proxy_request(
         raise HTTPException(status_code=504, detail=f"Service {service_name} timed out")
     except httpx.RequestError as e:
         logger.error("Error proxying to %s: %s", service_name, e)
+        record_uptime_check(False)
         raise HTTPException(status_code=502, detail=f"Service {service_name} unavailable")
+
+    record_latency(service_name, time.perf_counter() - started)
+    record_uptime_check(response.is_success)
 
     risk_score, reasons = threat_detector.evaluate(
         ip=_client_ip(request),
@@ -643,6 +693,9 @@ async def proxy_request(
     response_headers.update(_build_security_headers())
     
     if isinstance(response_body, (dict, list)):
+        if cache_key and response.is_success:
+            response_cache.set(cache_key, response_body)
+            response_headers["X-Cache"] = "MISS"
         return JSONResponse(
             status_code=response.status_code,
             content=response_body,

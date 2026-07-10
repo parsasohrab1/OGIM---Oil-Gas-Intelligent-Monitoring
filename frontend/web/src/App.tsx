@@ -19,6 +19,10 @@ import ARIntegration from './pages/ARIntegration'
 import BlockchainAudit from './pages/BlockchainAudit'
 import DataQualityLineage from './pages/DataQualityLineage'
 import WorkflowAutomation from './pages/WorkflowAutomation'
+import MLModels from './pages/MLModels'
+import Performance from './pages/Performance'
+import ReportBuilder from './pages/ReportBuilder'
+import SecurityCenter from './pages/SecurityCenter'
 import './App.css'
 
 const queryClient = new QueryClient()
@@ -52,6 +56,10 @@ function App() {
             <Route path="/blockchain-audit" element={<BlockchainAudit />} />
             <Route path="/data-quality-lineage" element={<DataQualityLineage />} />
             <Route path="/workflow-automation" element={<WorkflowAutomation />} />
+            <Route path="/ml-models" element={<MLModels />} />
+            <Route path="/performance" element={<Performance />} />
+            <Route path="/report-builder" element={<ReportBuilder />} />
+            <Route path="/security" element={<SecurityCenter />} />
           </Routes>
         </Layout>
       </Router>

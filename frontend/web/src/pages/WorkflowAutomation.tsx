@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { reportingAPI } from '../api/services'
+import WorkflowDAG from '../components/WorkflowDAG'
+import './WorkflowAutomation.css'
 
 type Step = {
   id: string
@@ -11,23 +13,28 @@ type Step = {
 
 export default function WorkflowAutomation() {
   const [name, setName] = useState('Daily Ops Workflow')
-  const [description, setDescription] = useState('Auto run DQ + notify')
+  const [description, setDescription] = useState('Auto run DQ + health checks')
   const [scheduleMinutes, setScheduleMinutes] = useState('60')
   const [steps, setSteps] = useState<Step[]>([
-    { id: 'step1', type: 'data_quality_lineage', config: { lookback_hours: 24 }, depends_on: [] },
-    { id: 'step2', type: 'http_request', config: { method: 'POST', url: 'http://localhost:8004/alerts/TEST/acknowledge' }, depends_on: ['step1'] }
+    { id: 'dq', type: 'data_quality_lineage', config: { lookback_hours: 24 }, depends_on: [] },
+    { id: 'health', type: 'http_request', config: { method: 'GET', url: 'http://localhost:8005/health' }, depends_on: ['dq'] },
   ])
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('')
 
   const workflowsQuery = useQuery({
     queryKey: ['workflows'],
     queryFn: () => reportingAPI.listWorkflows(),
-    refetchInterval: 15000
+    refetchInterval: 15000,
+  })
+
+  const templatesQuery = useQuery({
+    queryKey: ['workflow-templates'],
+    queryFn: () => reportingAPI.getWorkflowTemplates(),
   })
 
   const stepTypesQuery = useQuery({
     queryKey: ['workflow-step-types'],
-    queryFn: () => reportingAPI.getWorkflowStepTypes()
+    queryFn: () => reportingAPI.getWorkflowStepTypes(),
   })
 
   const createMutation = useMutation({
@@ -36,81 +43,78 @@ export default function WorkflowAutomation() {
         name,
         description,
         schedule_minutes: Number(scheduleMinutes) || undefined,
-        steps
+        steps,
       }),
-    onSuccess: () => workflowsQuery.refetch()
+    onSuccess: () => workflowsQuery.refetch(),
   })
 
   const runMutation = useMutation({
-    mutationFn: () => reportingAPI.runWorkflow(selectedWorkflowId, {})
+    mutationFn: () => reportingAPI.runWorkflow(selectedWorkflowId, {}),
   })
 
   const runsQuery = useQuery({
     queryKey: ['workflow-runs', selectedWorkflowId],
     queryFn: () => reportingAPI.getWorkflowRuns(selectedWorkflowId),
-    enabled: !!selectedWorkflowId
+    enabled: !!selectedWorkflowId,
   })
+
+  const applyTemplate = (template: any) => {
+    setName(template.name)
+    setDescription(template.description || '')
+    setScheduleMinutes(String(template.schedule_minutes || ''))
+    setSteps(template.steps)
+  }
 
   const addStep = () => {
     const idx = steps.length + 1
     setSteps((prev) => [
       ...prev,
-      { id: `step${idx}`, type: 'http_request', config: { method: 'GET', url: 'http://localhost:8005/health' }, depends_on: [] }
+      { id: `step${idx}`, type: 'http_request', config: { method: 'GET', url: 'http://localhost:8005/health' }, depends_on: prev.length ? [prev[prev.length - 1].id] : [] },
     ])
   }
 
   const stepTypeOptions = useMemo(() => stepTypesQuery.data?.step_types || [], [stepTypesQuery.data])
 
   return (
-    <div style={{ padding: '1rem' }}>
-      <h2>Workflow Automation (Airflow-like + Visual Builder)</h2>
+    <div className="wf-page">
+      <h2>Workflow Automation</h2>
+      <p className="wf-subtitle">Airflow-like scheduler with visual DAG builder</p>
 
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: '0.8rem', marginTop: '1rem' }}>
-        <h3>Create Workflow</h3>
-        <div style={{ display: 'grid', gap: '0.5rem' }}>
+      <section className="wf-section">
+        <h3>Templates</h3>
+        <div className="wf-templates">
+          {(templatesQuery.data?.templates || []).map((tpl: any) => (
+            <button key={tpl.template_id} className="wf-template-btn" onClick={() => applyTemplate(tpl)}>
+              <strong>{tpl.name}</strong>
+              <span>{tpl.description}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <div className="wf-layout">
+        <section className="wf-section">
+          <h3>Create Workflow</h3>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Workflow name" />
           <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" />
-          <input value={scheduleMinutes} onChange={(e) => setScheduleMinutes(e.target.value)} placeholder="Schedule minutes (optional)" />
-        </div>
+          <input value={scheduleMinutes} onChange={(e) => setScheduleMinutes(e.target.value)} placeholder="Schedule (minutes)" />
 
-        <h4 style={{ marginTop: '0.8rem' }}>Steps</h4>
-        {steps.map((step, idx) => (
-          <div key={step.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: '0.6rem', marginBottom: '0.5rem' }}>
-            <div style={{ display: 'grid', gap: '0.4rem' }}>
+          <h4>Steps</h4>
+          {steps.map((step, idx) => (
+            <div key={step.id} className="wf-step-card">
               <input
                 value={step.id}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, id: v } : s)))
-                }}
+                onChange={(e) => setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, id: e.target.value } : s)))}
                 placeholder="Step ID"
               />
               <select
                 value={step.type}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, type: v } : s)))
-                }}
+                onChange={(e) => setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, type: e.target.value } : s)))}
               >
                 {stepTypeOptions.map((opt: any) => (
-                  <option key={opt.type} value={opt.type}>
-                    {opt.label}
-                  </option>
+                  <option key={opt.type} value={opt.type}>{opt.label}</option>
                 ))}
               </select>
-              <textarea
-                value={JSON.stringify(step.config)}
-                onChange={(e) => {
-                  const txt = e.target.value
-                  try {
-                    const parsed = JSON.parse(txt)
-                    setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, config: parsed } : s)))
-                  } catch {
-                    // keep editing until valid JSON
-                  }
-                }}
-                rows={4}
-              />
               <input
                 value={step.depends_on.join(',')}
                 onChange={(e) => {
@@ -120,49 +124,42 @@ export default function WorkflowAutomation() {
                 placeholder="depends_on (comma separated)"
               />
             </div>
-          </div>
-        ))}
+          ))}
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={addStep}>Add Step</button>
-          <button onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
-            {createMutation.isPending ? 'Creating...' : 'Create Workflow'}
-          </button>
-        </div>
+          <div className="wf-actions">
+            <button onClick={addStep}>Add Step</button>
+            <button className="primary" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
+              {createMutation.isPending ? 'Creating...' : 'Create Workflow'}
+            </button>
+          </div>
+        </section>
+
+        <section className="wf-section">
+          <h3>Visual DAG</h3>
+          <WorkflowDAG steps={steps} />
+        </section>
       </div>
 
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: '0.8rem', marginTop: '1rem' }}>
-        <h3>Workflows</h3>
+      <section className="wf-section">
+        <h3>Run Workflows</h3>
         <select value={selectedWorkflowId} onChange={(e) => setSelectedWorkflowId(e.target.value)}>
           <option value="">Select workflow</option>
           {(workflowsQuery.data?.workflows || []).map((wf: any) => (
-            <option key={wf.workflow_id} value={wf.workflow_id}>
-              {wf.workflow_id} - {wf.name}
-            </option>
+            <option key={wf.workflow_id} value={wf.workflow_id}>{wf.workflow_id} — {wf.name}</option>
           ))}
         </select>
-        <button
-          onClick={() => runMutation.mutate()}
-          disabled={!selectedWorkflowId || runMutation.isPending}
-          style={{ marginLeft: '0.5rem' }}
-        >
+        <button onClick={() => runMutation.mutate()} disabled={!selectedWorkflowId || runMutation.isPending}>
           {runMutation.isPending ? 'Running...' : 'Run Now'}
         </button>
-
         {runMutation.data && (
-          <pre style={{ marginTop: '0.8rem', background: '#f8f8f8', padding: '0.6rem', maxHeight: 240, overflow: 'auto' }}>
-            {JSON.stringify(runMutation.data, null, 2)}
-          </pre>
+          <pre className="wf-pre">{JSON.stringify(runMutation.data, null, 2)}</pre>
         )}
-      </div>
+      </section>
 
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: '0.8rem', marginTop: '1rem' }}>
+      <section className="wf-section">
         <h3>Recent Runs</h3>
-        <pre style={{ background: '#f8f8f8', padding: '0.6rem', maxHeight: 260, overflow: 'auto' }}>
-          {JSON.stringify(runsQuery.data?.runs || [], null, 2)}
-        </pre>
-      </div>
+        <pre className="wf-pre">{JSON.stringify(runsQuery.data?.runs || [], null, 2)}</pre>
+      </section>
     </div>
   )
 }
-

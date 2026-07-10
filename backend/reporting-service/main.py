@@ -528,17 +528,34 @@ async def query_bi_dataset(request: ReportBuilderRequest):
 @app.get("/bi/connectors")
 async def get_bi_connectors():
     """Connection templates for Power BI / Tableau."""
+    gateway = os.getenv("API_GATEWAY_PUBLIC_URL", "http://localhost:8000")
     return {
         "power_bi": {
             "method": "REST",
-            "base_url": "/bi/query",
+            "base_url": f"{gateway}/api/reporting/bi/query",
+            "metadata_url": f"{gateway}/api/reporting/bi/metadata",
             "auth": "Bearer token via API Gateway",
-            "notes": "Use POST with report builder payload to define dimensions/measures.",
+            "sample_payload": {
+                "name": "Power BI Export",
+                "dimensions": ["well_name", "sensor_type"],
+                "measures": ["count", "avg_value", "max_value"],
+                "lookback_hours": 24,
+                "limit": 500,
+            },
+            "notes": "Use Power BI 'Web' connector with POST and JSON body.",
         },
         "tableau": {
             "method": "Web Data Connector / REST",
-            "base_url": "/bi/query",
+            "base_url": f"{gateway}/api/reporting/bi/query",
+            "metadata_url": f"{gateway}/api/reporting/bi/metadata",
             "auth": "Bearer token via API Gateway",
+            "sample_payload": {
+                "name": "Tableau Export",
+                "dimensions": ["well_name", "sensor_id"],
+                "measures": ["avg_value", "min_value", "max_value"],
+                "lookback_hours": 48,
+                "limit": 1000,
+            },
             "notes": "Use /bi/metadata to bootstrap schema and /bi/query for data pulls.",
         },
     }
@@ -620,6 +637,44 @@ async def create_workflow(request: WorkflowCreateRequest):
 async def list_workflows():
     """List defined workflows."""
     return {"workflows": list(workflows_db.values()), "count": len(workflows_db)}
+
+
+@app.get("/workflows/templates")
+async def list_workflow_templates():
+    """Pre-built workflow templates for common operational tasks."""
+    return {
+        "templates": [
+            {
+                "template_id": "daily-dq-report",
+                "name": "Daily Data Quality Report",
+                "description": "Generate DQ + lineage report every 24 hours",
+                "schedule_minutes": 1440,
+                "steps": [
+                    {"id": "dq", "type": "data_quality_lineage", "config": {"lookback_hours": 24}, "depends_on": []},
+                ],
+            },
+            {
+                "template_id": "hourly-health-check",
+                "name": "Hourly Service Health Check",
+                "description": "Ping reporting and alert services",
+                "schedule_minutes": 60,
+                "steps": [
+                    {"id": "reporting_health", "type": "http_request", "config": {"method": "GET", "url": "http://reporting-service:8005/health"}, "depends_on": []},
+                    {"id": "alert_health", "type": "http_request", "config": {"method": "GET", "url": "http://alert-service:8004/health"}, "depends_on": ["reporting_health"]},
+                ],
+            },
+            {
+                "template_id": "weekly-production-report",
+                "name": "Weekly Production Report",
+                "description": "Generate weekly report then DQ validation",
+                "schedule_minutes": 10080,
+                "steps": [
+                    {"id": "report", "type": "generate_report", "config": {"report_type": "weekly"}, "depends_on": []},
+                    {"id": "dq", "type": "data_quality_lineage", "config": {"lookback_hours": 168}, "depends_on": ["report"]},
+                ],
+            },
+        ]
+    }
 
 
 @app.get("/workflows/{workflow_id}")

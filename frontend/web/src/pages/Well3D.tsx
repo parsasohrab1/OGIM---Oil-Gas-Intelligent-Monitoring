@@ -2,8 +2,8 @@ import { Suspense, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, Text, Html, Environment } from '@react-three/drei'
 import * as THREE from 'three'
-import { useQuery } from '@tanstack/react-query'
-import { well3DAPI } from '../api/services'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { well3DAPI, digitalTwinAPI } from '../api/services'
 import './Well3D.css'
 
 interface DepthData {
@@ -826,6 +826,20 @@ export default function Well3D() {
   const [selectedWell, setSelectedWell] = useState<string>('PROD-001')
   const [autoRotate, setAutoRotate] = useState(false)
   const [viewMode, setViewMode] = useState<'single' | 'multiple'>('single')
+  const [chokePct, setChokePct] = useState(0)
+  const [pumpSpeedPct, setPumpSpeedPct] = useState(0)
+  const [whatIfResult, setWhatIfResult] = useState<any>(null)
+
+  const whatIfMutation = useMutation({
+    mutationFn: (base: { flow_rate: number; pressure: number; temperature: number }) =>
+      digitalTwinAPI.runWhatIfScenario({
+        well_name: selectedWell,
+        base_conditions: base,
+        adjustments: { choke_pct: chokePct, pump_speed_pct: pumpSpeedPct },
+        horizon_hours: 12,
+      }),
+    onSuccess: (data) => setWhatIfResult(data),
+  })
 
   // Fetch list of wells from Wells page data
   const { data: wellsResponse } = useQuery({
@@ -1037,6 +1051,43 @@ export default function Well3D() {
           </div>
         )}
       </div>
+
+      {viewMode === 'single' && (
+        <div className="well3d-whatif">
+          <h3>What-if Scenario Analysis</h3>
+          <div className="whatif-controls">
+            <label>
+              Choke adjustment (%)
+              <input type="range" min={-20} max={20} value={chokePct} onChange={(e) => setChokePct(Number(e.target.value))} />
+              {chokePct}%
+            </label>
+            <label>
+              Pump speed adjustment (%)
+              <input type="range" min={-20} max={20} value={pumpSpeedPct} onChange={(e) => setPumpSpeedPct(Number(e.target.value))} />
+              {pumpSpeedPct}%
+            </label>
+            <button
+              onClick={() =>
+                whatIfMutation.mutate({
+                  flow_rate: displayData.surfaceData.flowRate,
+                  pressure: displayData.surfaceData.wellheadPressure,
+                  temperature: displayData.surfaceData.wellheadTemperature,
+                })
+              }
+              disabled={whatIfMutation.isPending}
+            >
+              {whatIfMutation.isPending ? 'Simulating...' : 'Run Simulation'}
+            </button>
+          </div>
+          {whatIfResult && (
+            <div className="whatif-results">
+              <p><strong>Projected flow:</strong> {whatIfResult.projected?.flow_rate?.toFixed?.(1) ?? whatIfResult.projected_flow_rate ?? '—'} bbl/d</p>
+              <p><strong>Projected pressure:</strong> {whatIfResult.projected?.pressure?.toFixed?.(1) ?? whatIfResult.projected_pressure ?? '—'} psi</p>
+              <p><strong>Risk level:</strong> {whatIfResult.risk_level ?? whatIfResult.risk ?? '—'}</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

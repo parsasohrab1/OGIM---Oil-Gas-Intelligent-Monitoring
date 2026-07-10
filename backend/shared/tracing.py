@@ -53,6 +53,10 @@ def setup_tracing(
         }
     )
 
+    endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT or os.getenv(
+        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
+    )
+
     provider = TracerProvider(resource=resource)
     for processor in _build_exporter():
         provider.add_span_processor(processor)
@@ -68,6 +72,6 @@ def setup_tracing(
     logger.info(
         "Tracing configured for %s (endpoint=%s)",
         service_name,
-        endpoint if endpoint else "console",
+        endpoint or "console",
     )
 

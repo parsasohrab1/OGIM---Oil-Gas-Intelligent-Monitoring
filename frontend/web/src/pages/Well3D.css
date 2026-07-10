@@ -240,3 +240,50 @@
   }
 }
 
+.well3d-whatif {
+  padding: 1rem 1.25rem;
+  background: rgba(0, 0, 0, 0.35);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.well3d-whatif h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.whatif-controls {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.whatif-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.whatif-controls button {
+  padding: 0.5rem 1rem;
+  background: #4a6cf7;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.whatif-results {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.whatif-results p {
+  margin: 0.25rem 0;
+}
+

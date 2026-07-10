@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { acknowledgeAlert } from './api'
 
 const CACHE_KEY = 'ogim_mobile_alerts_cache'
+const WELLS_CACHE_KEY = 'ogim_mobile_wells_cache'
 const QUEUE_KEY = 'ogim_mobile_action_queue'
 
 export async function saveAlertsCache(alerts: unknown[]): Promise<void> {
@@ -10,6 +11,20 @@ export async function saveAlertsCache(alerts: unknown[]): Promise<void> {
 
 export async function loadAlertsCache(): Promise<any[]> {
   const raw = await AsyncStorage.getItem(CACHE_KEY)
+  if (!raw) return []
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return []
+  }
+}
+
+export async function saveWellsCache(wells: unknown[]): Promise<void> {
+  await AsyncStorage.setItem(WELLS_CACHE_KEY, JSON.stringify(wells))
+}
+
+export async function loadWellsCache(): Promise<any[]> {
+  const raw = await AsyncStorage.getItem(WELLS_CACHE_KEY)
   if (!raw) return []
   try {
     return JSON.parse(raw)
@@ -49,4 +64,3 @@ export async function flushOfflineQueue(): Promise<{ processed: number; failed: 
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(remaining))
   return { processed, failed }
 }
-

@@ -230,7 +230,8 @@ class Settings(BaseSettings):
     API_SECURITY_MAX_QUERY_PARAMS: int = Field(default=50, env="API_SECURITY_MAX_QUERY_PARAMS")
     API_SECURITY_MAX_PARAM_LENGTH: int = Field(default=1024, env="API_SECURITY_MAX_PARAM_LENGTH")
     API_SECURITY_ENABLE_INPUT_HARDENING: bool = Field(default=True, env="API_SECURITY_ENABLE_INPUT_HARDENING")
-    CACHE_TTL_SECONDS: int = Field(default=10, env="CACHE_TTL_SECONDS")
+    CACHE_TTL_SECONDS: int = Field(default=30, env="CACHE_TTL_SECONDS")
+    CACHE_MAX_ENTRIES: int = Field(default=2048, env="CACHE_MAX_ENTRIES")
     
     # OPC-UA / SCADA
     OPCUA_SERVER_URL: Optional[str] = Field(default=None, env="OPCUA_SERVER_URL")

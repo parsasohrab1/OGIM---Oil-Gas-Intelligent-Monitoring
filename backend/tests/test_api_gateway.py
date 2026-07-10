@@ -26,6 +26,7 @@ def reset_state():
     api_gateway.settings.RATE_LIMIT_ENABLED = False
     api_gateway.settings.ZERO_TRUST_ENFORCED = False
     api_gateway.settings.API_SECURITY_ENABLE_INPUT_HARDENING = True
+    api_gateway.response_cache.clear()
     yield
 
 
@@ -136,4 +137,39 @@ def test_proxy_blocks_malformed_json(monkeypatch):
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Malformed JSON payload"
+
+
+def test_proxy_blocks_sqli_in_json_body(monkeypatch):
+    stub_decode_token(monkeypatch)
+    response = client.post(
+        "/api/alert/alerts",
+        headers={**auth_header(), "Content-Type": "application/json"},
+        json={"message": "1 OR 1=1", "well_name": "PROD-001"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Request contains blocked input patterns"
+
+
+def test_kpi_summary_endpoint():
+    response = client.get("/kpi/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert "latency" in body
+    assert "uptime" in body
+    assert "adoption" in body
+    assert "alert_quality" in body
+
+
+def test_kpi_cache_stats_endpoint():
+    response = client.get("/kpi/cache-stats")
+    assert response.status_code == 200
+    assert "hits" in response.json()
+
+
+def test_security_siem_events_endpoint():
+    response = client.get("/security/siem/events?limit=5")
+    assert response.status_code == 200
+    body = response.json()
+    assert "events" in body
+    assert "summary" in body
 

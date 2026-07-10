@@ -1,33 +1,26 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { dataIngestionAPI, alertAPI } from '../api/services'
-import { startRealtimeStream } from '../api/realtimeStream'
+import { useWebSocket } from '../hooks/useWebSocket'
 import './Dashboard.css'
 
 export default function Dashboard() {
   const queryClient = useQueryClient()
-  const [transport, setTransport] = useState<'websocket' | 'sse' | 'disconnected'>('disconnected')
 
-  useEffect(() => {
-    const stop = startRealtimeStream({
-      onTransportChange: setTransport,
-      onSnapshot: (payload) => {
-        const records = payload.data.sensor_records || []
-        const transformed = records.map((record: any) => ({
-          time: new Date(record.timestamp).toLocaleTimeString(),
-          pressure: record.sensor_type === 'pressure' ? record.value : null,
-          temperature: record.sensor_type === 'temperature' ? record.value : null,
-          flowRate: record.sensor_type === 'flow_rate' ? record.value : null,
-        }))
+  const { transport } = useWebSocket({
+    onSnapshot: (payload) => {
+      const records = payload.data.sensor_records || []
+      const transformed = records.map((record: any) => ({
+        time: new Date(record.timestamp).toLocaleTimeString(),
+        pressure: record.sensor_type === 'pressure' ? record.value : null,
+        temperature: record.sensor_type === 'temperature' ? record.value : null,
+        flowRate: record.sensor_type === 'flow_rate' ? record.value : null,
+      }))
 
-        queryClient.setQueryData(['sensor-data'], transformed)
-        queryClient.setQueryData(['alerts', 'open'], payload.data.alerts || { count: 0, alerts: [] })
-      },
-    })
-
-    return stop
-  }, [queryClient])
+      queryClient.setQueryData(['sensor-data'], transformed)
+      queryClient.setQueryData(['alerts', 'open'], payload.data.alerts || { count: 0, alerts: [] })
+    },
+  })
   
   // Fetch sensor data from backend
   const { data: sensorData, isLoading } = useQuery({

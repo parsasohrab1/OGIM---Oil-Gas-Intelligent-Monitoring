@@ -2,8 +2,8 @@
 Zero Trust + SIEM + threat detection helpers.
 """
 from datetime import datetime, timedelta
-from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from collections import defaultdict, deque
+from typing import Any, Deque, Dict, List, Optional, Tuple
 import ipaddress
 import json
 import os
@@ -12,12 +12,15 @@ from .logging_config import setup_logging
 
 logger = setup_logging("threat-detection")
 
+MAX_SIEM_EVENTS = 500
+
 
 class SIEMEventLogger:
     """Emit structured security events for SIEM ingestion."""
 
     def __init__(self, output_file: Optional[str] = None):
         self.output_file = output_file or os.getenv("SIEM_OUTPUT_FILE")
+        self._events: Deque[Dict[str, Any]] = deque(maxlen=MAX_SIEM_EVENTS)
 
     def emit(self, event_type: str, severity: str, payload: Dict[str, Any]) -> None:
         event = {
@@ -26,6 +29,7 @@ class SIEMEventLogger:
             "timestamp": datetime.utcnow().isoformat(),
             "payload": payload,
         }
+        self._events.appendleft(event)
         logger.warning("SIEM_EVENT %s", json.dumps(event, ensure_ascii=True))
         if self.output_file:
             try:
@@ -33,6 +37,23 @@ class SIEMEventLogger:
                     f.write(json.dumps(event, ensure_ascii=True) + "\n")
             except Exception as exc:
                 logger.error("Failed to write SIEM event file: %s", exc)
+
+    def recent_events(self, limit: int = 50, severity: Optional[str] = None) -> List[Dict[str, Any]]:
+        events = list(self._events)
+        if severity:
+            events = [e for e in events if e.get("severity") == severity]
+        return events[:limit]
+
+    def summary(self) -> Dict[str, Any]:
+        counts: Dict[str, int] = defaultdict(int)
+        for event in self._events:
+            counts[event.get("severity", "unknown")] += 1
+        return {
+            "total_buffered": len(self._events),
+            "by_severity": dict(counts),
+            "zero_trust_enforced": os.getenv("ZERO_TRUST_ENFORCED", "false").lower() == "true",
+            "threat_block_threshold": int(os.getenv("THREAT_BLOCK_THRESHOLD", "70")),
+        }
 
 
 class ThreatDetector:

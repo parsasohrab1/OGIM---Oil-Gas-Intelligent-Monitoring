@@ -32,12 +32,11 @@
 
 ## 4) گزارش‌گیری پیشرفته و BI
 
-صفحه `Reports`:
-- Report Builder:
-  - انتخاب `dimensions` و `measures`
-  - اجرای گزارش سفارشی
-- BI connectors:
-  - metadata برای Power BI/Tableau
+- صفحه `Report Builder` (`/report-builder`):
+  - انتخاب dimensions/measures
+  - نمودار و export CSV
+  - اتصال Power BI / Tableau
+- صفحه `Reports`: گزارش‌های استاندارد daily/weekly/monthly
 
 ## 5) Workflow Automation
 
@@ -58,8 +57,15 @@
 ## 7) اپ موبایل
 
 `mobile/app`:
+- Login با JWT
 - Push Notification برای هشدارهای critical
-- Offline mode:
-  - cache داده‌ها
-  - queue عملیات و sync بعد از اتصال
+- Offline mode (Alerts + Wells)
+- Queue عملیات و sync بعد از اتصال
+
+## 8) امنیت و KPIهای اجرایی
+
+- صفحه `Security` (`/security`): رویدادهای SIEM، Zero Trust، threat detection
+- صفحه `APM` (`/performance`): داشبورد عملکرد + KPIهای اجرایی
+- KPIها: Latency P95، Uptime، Adoption، False Positive Rate
+- API: `GET /kpi/summary`
 

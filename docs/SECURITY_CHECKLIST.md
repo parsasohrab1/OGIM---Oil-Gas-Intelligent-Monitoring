@@ -8,10 +8,12 @@
 - [ ] Role/RBAC برای سرویس‌ها مطابق با `docs/SECURITY_ROLES.md` بررسی شده است.
 
 ## Runtime
-- [ ] Rate limiting روی `/token` و سایر ورودی‌های حساس فعال است.
+- [x] Rate limiting روی gateway و ورودی‌های حساس فعال است (`RATE_LIMIT_ENABLED`).
+- [x] Input hardening برای XSS/SQLi (`shared/input_validation.py`).
+- [x] Response cache برای GETهای پرتکرار (`TTLResponseCache`).
 - [ ] Logging ساخت‌یافته (JSON) به سیستم مرکزی ارسال می‌شود.
-- [ ] Tracing و metrics فعال و در داشبوردها قابل مشاهده است.
-- [ ] هشدارهای امنیتی (مثلاً لاگین ناموفق مکرر) در SIEM یا Prometheus تعریف شده‌اند.
+- [x] Tracing و metrics فعال و در داشبوردها قابل مشاهده است.
+- [x] هشدارهای امنیتی در SIEM buffer و Prometheus (`executive-kpis.yml`) تعریف شده‌اند.
 
 ## Post-Deployment
 - [ ] حساب‌های پیش‌فرض حذف یا غیرفعال شده‌اند.

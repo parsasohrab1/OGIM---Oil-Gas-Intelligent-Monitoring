@@ -1,4 +1,6 @@
-type RealtimeSnapshotPayload = {
+import { getApiBaseUrl, toWebSocketBaseUrl } from './config'
+
+export type RealtimeSnapshotPayload = {
   type: 'snapshot'
   timestamp: string
   data: {
@@ -15,13 +17,10 @@ type RealtimeStreamHandlers = {
   onTransportChange?: (transport: 'websocket' | 'sse' | 'disconnected') => void
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-
-function toWebSocketBaseUrl(httpBaseUrl: string): string {
-  const url = new URL(httpBaseUrl)
-  const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${url.host}`
-}
+const WS_RETRY_BASE_MS = 2000
+const WS_RETRY_MAX_MS = 30000
+const SSE_RETRY_BASE_MS = 3000
+const SSE_RETRY_MAX_MS = 20000
 
 export function startRealtimeStream(handlers: RealtimeStreamHandlers): () => void {
   const token = localStorage.getItem('access_token')
@@ -30,15 +29,23 @@ export function startRealtimeStream(handlers: RealtimeStreamHandlers): () => voi
     return () => undefined
   }
 
+  const apiBase = getApiBaseUrl()
   let closed = false
   let socket: WebSocket | null = null
   let sse: EventSource | null = null
   let wsRetryTimeout: number | undefined
+  let sseRetryTimeout: number | undefined
+  let wsRetryAttempt = 0
+  let sseRetryAttempt = 0
 
   const cleanup = () => {
     if (wsRetryTimeout) {
       window.clearTimeout(wsRetryTimeout)
       wsRetryTimeout = undefined
+    }
+    if (sseRetryTimeout) {
+      window.clearTimeout(sseRetryTimeout)
+      sseRetryTimeout = undefined
     }
     if (socket) {
       socket.close()
@@ -50,12 +57,24 @@ export function startRealtimeStream(handlers: RealtimeStreamHandlers): () => voi
     }
   }
 
-  const trySSEFallback = () => {
-    if (closed || sse) {
-      return
-    }
+  const scheduleWsRetry = () => {
+    if (closed) return
+    const delay = Math.min(WS_RETRY_BASE_MS * 2 ** wsRetryAttempt, WS_RETRY_MAX_MS)
+    wsRetryAttempt += 1
+    wsRetryTimeout = window.setTimeout(connectWebSocket, delay)
+  }
 
-    const sseUrl = `${API_BASE_URL}/stream/realtime/sse?token=${encodeURIComponent(token)}`
+  const scheduleSseRetry = () => {
+    if (closed || sse) return
+    const delay = Math.min(SSE_RETRY_BASE_MS * 2 ** sseRetryAttempt, SSE_RETRY_MAX_MS)
+    sseRetryAttempt += 1
+    sseRetryTimeout = window.setTimeout(trySSEFallback, delay)
+  }
+
+  const trySSEFallback = () => {
+    if (closed || sse) return
+
+    const sseUrl = `${apiBase}/stream/realtime/sse?token=${encodeURIComponent(token)}`
     sse = new EventSource(sseUrl)
     handlers.onTransportChange?.('sse')
 
@@ -63,29 +82,33 @@ export function startRealtimeStream(handlers: RealtimeStreamHandlers): () => voi
       try {
         const payload = JSON.parse(event.data) as RealtimeSnapshotPayload
         handlers.onSnapshot(payload)
+        sseRetryAttempt = 0
       } catch {
         // Ignore malformed payloads to keep stream alive.
       }
     })
 
     sse.onerror = () => {
+      if (sse) {
+        sse.close()
+        sse = null
+      }
       if (!closed) {
         handlers.onTransportChange?.('disconnected')
+        scheduleSseRetry()
       }
     }
   }
 
   const connectWebSocket = () => {
-    if (closed) {
-      return
-    }
+    if (closed) return
 
-    const wsBaseUrl = toWebSocketBaseUrl(API_BASE_URL)
+    const wsBaseUrl = toWebSocketBaseUrl(apiBase)
     const wsUrl = `${wsBaseUrl}/stream/realtime/ws?token=${encodeURIComponent(token)}`
-
     socket = new WebSocket(wsUrl)
 
     socket.onopen = () => {
+      wsRetryAttempt = 0
       handlers.onTransportChange?.('websocket')
       if (sse) {
         sse.close()
@@ -107,11 +130,10 @@ export function startRealtimeStream(handlers: RealtimeStreamHandlers): () => voi
     }
 
     socket.onclose = () => {
-      if (closed) {
-        return
-      }
+      socket = null
+      if (closed) return
       trySSEFallback()
-      wsRetryTimeout = window.setTimeout(connectWebSocket, 8000)
+      scheduleWsRetry()
     }
   }
 
@@ -123,4 +145,3 @@ export function startRealtimeStream(handlers: RealtimeStreamHandlers): () => voi
     cleanup()
   }
 }
-

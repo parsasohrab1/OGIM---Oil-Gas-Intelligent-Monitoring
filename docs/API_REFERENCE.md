@@ -45,10 +45,21 @@
 - `POST /api/reporting/bi/query`
 - `GET /api/reporting/bi/connectors`
 
+## Security (Zero Trust / SIEM / Threat Detection)
+
+- `GET /security/siem/events?limit=50&severity=...`
+- `GET /security/threat/status`
+
+## Executive KPIs
+
+- `GET /kpi/summary` — latency, uptime, adoption, false-positive rate
+- `GET /kpi/cache-stats` — API response cache hit rate
+
 ## Workflow Automation (Airflow-like)
 
 - `POST /api/reporting/workflows`
 - `GET /api/reporting/workflows`
+- `GET /api/reporting/workflows/templates`
 - `GET /api/reporting/workflows/{workflow_id}`
 - `POST /api/reporting/workflows/{workflow_id}/run`
 - `GET /api/reporting/workflows/{workflow_id}/runs`

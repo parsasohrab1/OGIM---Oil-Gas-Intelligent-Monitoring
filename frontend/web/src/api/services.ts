@@ -84,7 +84,17 @@ export const alertAPI = {
       params: { erp_type: erpType }
     })
     return response.data
-  }
+  },
+
+  getCorrelatedAlerts: async (status: string = 'open', limit: number = 100) => {
+    const response = await apiClient.get('/api/alert/alerts/correlations', { params: { status, limit } })
+    return response.data
+  },
+
+  runRCA: async (alertId: string, lookbackMinutes: number = 60) => {
+    const response = await apiClient.post(`/api/alert/alerts/${alertId}/rca`, { lookback_minutes: lookbackMinutes })
+    return response.data
+  },
 }
 
 // Tag Catalog API
@@ -208,7 +218,11 @@ export const reportingAPI = {
   getWorkflowStepTypes: async () => {
     const response = await apiClient.get('/api/reporting/workflows/visual-builder/step-types')
     return response.data
-  }
+  },
+  getWorkflowTemplates: async () => {
+    const response = await apiClient.get('/api/reporting/workflows/templates')
+    return response.data
+  },
 }
 
 // ML Inference API
@@ -236,7 +250,45 @@ export const mlAPI = {
   getLSTMModels: async () => {
     const response = await apiClient.get('/api/ml-inference/lstm/models')
     return response
-  }
+  },
+
+  getModelVersions: async (modelType: string, limit: number = 20) => {
+    const response = await apiClient.get(`/api/ml-inference/models/${modelType}/versions`, { params: { limit } })
+    return response.data
+  },
+
+  compareModelVersions: async (modelType: string, baselineVersion: string, candidateVersion: string) => {
+    const response = await apiClient.post(`/api/ml-inference/models/${modelType}/compare`, {
+      baseline_version: baselineVersion,
+      candidate_version: candidateVersion,
+    })
+    return response.data
+  },
+
+  getABTestConfig: async (modelType: string) => {
+    const response = await apiClient.get(`/api/ml-inference/models/${modelType}/ab-test`)
+    return response.data
+  },
+
+  configureABTest: async (modelType: string, config: {
+    baseline_version: string
+    candidate_version: string
+    candidate_weight: number
+    seed?: number
+  }) => {
+    const response = await apiClient.post(`/api/ml-inference/models/${modelType}/ab-test`, config)
+    return response.data
+  },
+
+  setDriftBaseline: async (modelType: string, features: Record<string, number>) => {
+    const response = await apiClient.post(`/api/ml-inference/models/${modelType}/drift/baseline`, { features })
+    return response.data
+  },
+
+  detectDrift: async (modelType: string, features: Record<string, number>, threshold: number = 2.0) => {
+    const response = await apiClient.post(`/api/ml-inference/models/${modelType}/drift/detect`, { features, threshold })
+    return response.data
+  },
 }
 
 // Storage Optimization API
@@ -294,7 +346,11 @@ export const digitalTwinAPI = {
   getAROverlay: async (wellName: string) => {
     const response = await apiClient.get(`/api/digital-twin/ar/overlay/${wellName}`)
     return response.data
-  }
+  },
+  getBimScene: async (wellName: string) => {
+    const response = await apiClient.get(`/api/digital-twin/bim3d/scene/${wellName}`)
+    return response.data
+  },
 }
 
 // DVR API
@@ -475,6 +531,29 @@ export const well3DAPI = {
       return ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
     }
   }
+}
+
+// Security API (via API Gateway)
+export const securityAPI = {
+  getSiemEvents: async (limit: number = 50, severity?: string) => {
+    const response = await apiClient.get('/security/siem/events', { params: { limit, severity } })
+    return response.data
+  },
+  getThreatStatus: async () => {
+    const response = await apiClient.get('/security/threat/status')
+    return response.data
+  },
+}
+
+export const kpiAPI = {
+  getSummary: async () => {
+    const response = await apiClient.get('/kpi/summary')
+    return response.data
+  },
+  getCacheStats: async () => {
+    const response = await apiClient.get('/kpi/cache-stats')
+    return response.data
+  },
 }
 
 export default {
