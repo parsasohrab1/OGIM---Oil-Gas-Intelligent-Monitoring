@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import timescale_engine
+from .sql_safety import validate_hypertable_name, validate_column_identifier, validate_interval_literal
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +182,17 @@ class TimescaleClusterManager:
                 conn = timescale_engine.connect()
             
             try:
+                # table_name is not yet a hypertable at this point, so it can't be checked
+                # against timescaledb_information.hypertables - validate as a bare identifier.
+                table_name = validate_column_identifier(table_name)
+                time_column = validate_column_identifier(time_column)
+                if partitioning_column:
+                    partitioning_column = validate_column_identifier(partitioning_column)
                 num_partitions = number_partitions or settings.TIMESCALE_NUMBER_PARTITIONS
-                chunk_interval = chunk_time_interval or settings.TIMESCALE_CHUNK_TIME_INTERVAL
-                
+                chunk_interval = validate_interval_literal(
+                    chunk_time_interval or settings.TIMESCALE_CHUNK_TIME_INTERVAL
+                )
+
                 # Build create_distributed_hypertable query
                 if partitioning_column:
                     query = f"""
@@ -296,6 +305,8 @@ class TimescaleClusterManager:
                 conn = timescale_engine.connect()
             
             try:
+                hypertable_name = validate_hypertable_name(conn, hypertable_name)
+                data_node_name = validate_column_identifier(data_node_name)
                 conn.execute(text(f"""
                     SELECT attach_data_node('{data_node_name}', '{hypertable_name}');
                 """))

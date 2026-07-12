@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { useAuth } from '../context/AuthContext'
 import { alertAPI } from '../api/services'
 import './Alerts.css'
 
@@ -12,6 +13,7 @@ function getMeta(alert: any): Record<string, any> {
 
 export default function Alerts() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('all')
   const [rcaResults, setRcaResults] = useState<Record<string, any>>({})
 
@@ -77,8 +79,8 @@ export default function Alerts() {
   })
 
   const handleAcknowledge = (alertId: string) => {
-    const username = localStorage.getItem('username') || 'operator1'
-    acknowledgeMutation.mutate({ alertId, username })
+    if (!user) return
+    acknowledgeMutation.mutate({ alertId, username: user.username })
   }
 
   const handleResolve = (alertId: string) => resolveMutation.mutate(alertId)

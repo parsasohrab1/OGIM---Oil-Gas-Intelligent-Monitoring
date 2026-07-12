@@ -23,9 +23,32 @@
   color: #888;
 }
 
+.nav-user {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #ccc;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.nav-user button {
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #262626;
+  color: #fff;
+  cursor: pointer;
+}
+
+.nav-user button:hover {
+  background: #333;
+}
+
 .nav-links {
   display: flex;
   gap: 2rem;
+  flex-wrap: wrap;
 }
 
 .nav-links a {

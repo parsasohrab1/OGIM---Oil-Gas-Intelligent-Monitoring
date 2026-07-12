@@ -23,6 +23,7 @@ from auth import require_authentication, require_roles
 from database import get_timescale_db
 from compression_manager import compression_manager
 from timescale_cluster import cluster_manager
+from sql_safety import validate_hypertable_name, validate_interval_literal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -178,14 +179,15 @@ async def add_retention_policy(
     """Add retention policy to drop old chunks"""
     try:
         conn = tsdb.connection()
-        query = f"""
+        table_name = validate_hypertable_name(conn, request.table_name)
+        query = """
             SELECT add_retention_policy(
-                '{request.table_name}',
-                INTERVAL '{request.drop_after_days} days',
+                :table_name,
+                make_interval(days => :drop_after_days),
                 if_not_exists => true
             );
         """
-        conn.execute(text(query))
+        conn.execute(text(query), {"table_name": table_name, "drop_after_days": request.drop_after_days})
         conn.commit()
         
         return {
@@ -207,33 +209,33 @@ async def get_partitioning_config(
     """Get partitioning configuration for a hypertable"""
     try:
         conn = tsdb.connection()
-        query = f"""
-            SELECT 
+        query = """
+            SELECT
                 hypertable_name,
                 num_dimensions,
                 num_chunks,
                 compression_enabled,
                 is_distributed
             FROM timescaledb_information.hypertables
-            WHERE hypertable_name = '{table_name}';
+            WHERE hypertable_name = :table_name;
         """
-        result = conn.execute(text(query))
+        result = conn.execute(text(query), {"table_name": table_name})
         row = result.fetchone()
-        
+
         if not row:
             raise HTTPException(status_code=404, detail=f"Hypertable {table_name} not found")
-        
+
         # Get chunk interval
-        chunk_query = f"""
-            SELECT 
+        chunk_query = """
+            SELECT
                 d.dimension_type,
                 d.time_interval,
                 d.integer_interval
             FROM timescaledb_information.dimensions d
-            WHERE d.hypertable_name = '{table_name}'
+            WHERE d.hypertable_name = :table_name
             ORDER BY d.dimension_number;
         """
-        chunk_result = conn.execute(text(chunk_query))
+        chunk_result = conn.execute(text(chunk_query), {"table_name": table_name})
         dimensions = []
         for dim_row in chunk_result:
             dimensions.append({
@@ -264,12 +266,16 @@ async def optimize_partitioning(
     """Optimize partitioning configuration"""
     try:
         conn = tsdb.connection()
-        
+
+        # chunk_time_interval can't be bound as a plain parameter inside INTERVAL '...',
+        # so it's checked against a strict allowlist pattern before interpolation.
+        safe_interval = validate_interval_literal(config.chunk_time_interval)
+
         # Set chunk time interval
         query = f"""
-            SELECT set_chunk_time_interval('{config.table_name}', INTERVAL '{config.chunk_time_interval}');
+            SELECT set_chunk_time_interval(:table_name, INTERVAL '{safe_interval}');
         """
-        conn.execute(text(query))
+        conn.execute(text(query), {"table_name": config.table_name})
         conn.commit()
         
         return {

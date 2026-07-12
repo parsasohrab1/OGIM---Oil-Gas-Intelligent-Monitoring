@@ -2,18 +2,20 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { dataIngestionAPI, well3DAPI, alertAPI, tagCatalogAPI } from '../api/services'
+import ErrorState from '../components/ErrorState'
 import './Wells.css'
 
 interface WellData {
   well_name: string
-  pressure: number
-  temperature: number
-  flowRate: number
-  waterCut: number
-  status: 'normal' | 'warning' | 'critical'
-  lastUpdate: string
+  pressure: number | null
+  temperature: number | null
+  flowRate: number | null
+  waterCut: number | null
+  status: 'normal' | 'warning' | 'critical' | 'unknown'
+  lastUpdate: string | null
   alertsCount: number
   tagsCount: number
+  dataUnavailable?: boolean
 }
 
 export default function Wells() {
@@ -21,29 +23,17 @@ export default function Wells() {
   const [timeRange, setTimeRange] = useState<'1h' | '24h' | '7d'>('24h')
 
   // Fetch list of wells
-  const { data: wellsResponse } = useQuery({
+  const { data: wellsResponse, isError: isWellsListError, refetch: refetchWellsList } = useQuery({
     queryKey: ['wells-list'],
     queryFn: async () => {
-      try {
-        const response = await well3DAPI.getWells()
-        return response.wells || response || []
-      } catch (error) {
-        if (import.meta.env.DEV) {
-          console.debug('Wells service unavailable')
-        }
-        return ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
-      }
+      const response = await well3DAPI.getWells()
+      return response.wells || response || []
     },
   })
 
-  const wells: string[] = Array.isArray(wellsResponse) 
-    ? wellsResponse 
-    : wellsResponse?.wells || ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
-  
-  // Ensure wells is always an array
-  const safeWells = Array.isArray(wells) && wells.length > 0 
-    ? wells 
-    : ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
+  const wells: string[] = Array.isArray(wellsResponse)
+    ? wellsResponse
+    : wellsResponse?.wells || []
 
   // Fetch sensor data for selected well
   const { data: sensorData, isLoading: isLoadingSensor } = useQuery({
@@ -69,84 +59,79 @@ export default function Wells() {
 
   // Fetch well summary data
   const { data: wellsSummary, isLoading: isLoadingSummary } = useQuery({
-    queryKey: ['wells-summary'],
+    queryKey: ['wells-summary', wells.join(',')],
     queryFn: async () => {
       const summary: WellData[] = []
-      
+
       for (const wellName of wells) {
         try {
           // Fetch latest sensor data for each well
-          const sensorResponse = await dataIngestionAPI.getSensorData({ 
+          const sensorResponse = await dataIngestionAPI.getSensorData({
             well_name: wellName,
             limit: 1
           })
-          
+
           // Fetch alerts count
           const alertsResponse = await alertAPI.getAlerts({ well_name: wellName, status: 'open' })
-          
+
           // Fetch tags count
           const tagsResponse = await tagCatalogAPI.getTags({ well_name: wellName })
-          
+
           const latestRecord = sensorResponse?.records?.[0]
-          
+
           if (latestRecord) {
-            // Determine status based on values
-            let status: 'normal' | 'warning' | 'critical' = 'normal'
-            const pressure = latestRecord.value || 0
-            const temperature = latestRecord.value || 0
-            
-            if (pressure > 3000 || temperature > 120) {
+            let status: WellData['status'] = 'normal'
+            const value = latestRecord.value ?? 0
+            if (value > 3000 || value > 120) {
               status = 'critical'
-            } else if (pressure > 2500 || temperature > 100) {
+            } else if (value > 2500 || value > 100) {
               status = 'warning'
             }
-            
+
             summary.push({
               well_name: wellName,
-              pressure: latestRecord.sensor_type === 'pressure' ? latestRecord.value : 2000 + Math.random() * 1000,
-              temperature: latestRecord.sensor_type === 'temperature' ? latestRecord.value : 70 + Math.random() * 30,
-              flowRate: latestRecord.sensor_type === 'flow_rate' ? latestRecord.value : 500 + Math.random() * 500,
-              waterCut: 20 + Math.random() * 40,
+              pressure: latestRecord.sensor_type === 'pressure' ? latestRecord.value : null,
+              temperature: latestRecord.sensor_type === 'temperature' ? latestRecord.value : null,
+              flowRate: latestRecord.sensor_type === 'flow_rate' ? latestRecord.value : null,
+              waterCut: null,
               status,
-              lastUpdate: latestRecord.timestamp || new Date().toISOString(),
+              lastUpdate: latestRecord.timestamp || null,
               alertsCount: alertsResponse?.count || 0,
               tagsCount: tagsResponse?.count || 0,
             })
           } else {
-            // Use mock data if no real data
             summary.push({
               well_name: wellName,
-              pressure: 2000 + Math.random() * 1000,
-              temperature: 70 + Math.random() * 30,
-              flowRate: 500 + Math.random() * 500,
-              waterCut: 20 + Math.random() * 40,
-              status: Math.random() > 0.8 ? 'warning' : 'normal',
-              lastUpdate: new Date().toISOString(),
-              alertsCount: 0,
-              tagsCount: 0,
+              pressure: null,
+              temperature: null,
+              flowRate: null,
+              waterCut: null,
+              status: 'unknown',
+              lastUpdate: null,
+              alertsCount: alertsResponse?.count || 0,
+              tagsCount: tagsResponse?.count || 0,
+              dataUnavailable: true,
             })
           }
         } catch (error) {
-          if (import.meta.env.DEV) {
-            console.debug(`Data unavailable for ${wellName}`)
-          }
-          // Add mock data on error
           summary.push({
             well_name: wellName,
-            pressure: 2000 + Math.random() * 1000,
-            temperature: 70 + Math.random() * 30,
-            flowRate: 500 + Math.random() * 500,
-            waterCut: 20 + Math.random() * 40,
-            status: Math.random() > 0.8 ? 'warning' : 'normal',
-            lastUpdate: new Date().toISOString(),
+            pressure: null,
+            temperature: null,
+            flowRate: null,
+            waterCut: null,
+            status: 'unknown',
+            lastUpdate: null,
             alertsCount: 0,
             tagsCount: 0,
+            dataUnavailable: true,
           })
         }
       }
-      
+
       return summary
     },
+    enabled: wells.length > 0,
     refetchInterval: 30000, // Refetch every 30 seconds
   })
 
@@ -182,20 +167,11 @@ export default function Wells() {
     value: record.value,
   }))
 
-  // Create fallback summary if loading or no data
-  const displaySummary: WellData[] = wellsSummary && wellsSummary.length > 0
-    ? wellsSummary
-    : safeWells.map((wellName: string) => ({
-        well_name: wellName,
-        pressure: 2000 + Math.random() * 1000,
-        temperature: 70 + Math.random() * 30,
-        flowRate: 500 + Math.random() * 500,
-        waterCut: 20 + Math.random() * 40,
-        status: 'normal' as const,
-        lastUpdate: new Date().toISOString(),
-        alertsCount: 0,
-        tagsCount: 0,
-      }))
+  const displaySummary: WellData[] = wellsSummary || []
+
+  if (isWellsListError) {
+    return <ErrorState message="Unable to load the wells list." onRetry={() => refetchWellsList()} />
+  }
 
   return (
     <div className="wells-page">
@@ -240,28 +216,31 @@ export default function Wells() {
               <span className={`status-badge ${well.status}`}>{well.status}</span>
             </div>
             <div className="well-card-body">
+              {well.dataUnavailable && (
+                <p className="well-data-unavailable">No recent sensor data available</p>
+              )}
               <div className="well-metric">
                 <span className="metric-label">Pressure</span>
-                <span className="metric-value">{well.pressure.toFixed(1)} psi</span>
+                <span className="metric-value">{well.pressure !== null ? `${well.pressure.toFixed(1)} psi` : '—'}</span>
               </div>
               <div className="well-metric">
                 <span className="metric-label">Temperature</span>
-                <span className="metric-value">{well.temperature.toFixed(1)} °C</span>
+                <span className="metric-value">{well.temperature !== null ? `${well.temperature.toFixed(1)} °C` : '—'}</span>
               </div>
               <div className="well-metric">
                 <span className="metric-label">Flow Rate</span>
-                <span className="metric-value">{well.flowRate.toFixed(1)} bbl/day</span>
+                <span className="metric-value">{well.flowRate !== null ? `${well.flowRate.toFixed(1)} bbl/day` : '—'}</span>
               </div>
               <div className="well-metric">
                 <span className="metric-label">Water Cut</span>
-                <span className="metric-value">{well.waterCut.toFixed(1)}%</span>
+                <span className="metric-value">{well.waterCut !== null ? `${well.waterCut.toFixed(1)}%` : '—'}</span>
               </div>
               <div className="well-meta">
                 <span>Alerts: {well.alertsCount}</span>
                 <span>Tags: {well.tagsCount}</span>
               </div>
               <div className="well-update">
-                Last Update: {new Date(well.lastUpdate).toLocaleString()}
+                Last Update: {well.lastUpdate ? new Date(well.lastUpdate).toLocaleString() : '—'}
               </div>
             </div>
           </div>

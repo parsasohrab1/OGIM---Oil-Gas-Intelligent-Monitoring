@@ -134,13 +134,18 @@ class Command(Base):
     equipment_id = Column(String(100), nullable=False)
     command_type = Column(String(50), nullable=False)
     parameters = Column(JSON, nullable=False)
-    status = Column(String(20), nullable=False, index=True)  # pending, approved, executing, executed, rejected
+    status = Column(String(20), nullable=False, index=True)  # pending, approved, executing, executed, rejected, failed
     requested_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     executed_at = Column(DateTime, nullable=True)
     requires_two_factor = Column(Boolean, default=True)
     execution_result = Column(JSON, nullable=True)
     erp_work_order_id = Column(String(100), nullable=True, index=True)  # Link to ERP work order
+    stage = Column(String(30), nullable=False, default="requested")  # secure workflow stage, see CommandStage
+    two_fa_verified_at = Column(DateTime, nullable=True)
+    simulation_result = Column(JSON, nullable=True)
+    approval_notes = Column(Text, nullable=True)
+    critical = Column(Boolean, nullable=False, default=False)  # routes to low-latency Kafka topic
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

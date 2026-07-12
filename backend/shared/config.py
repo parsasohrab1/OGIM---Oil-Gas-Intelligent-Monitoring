@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, model_validator
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT_DIR / "config"
@@ -37,6 +37,15 @@ for candidate in search_candidates:
 
 if candidate_env_file is None:
     candidate_env_file = DEFAULT_ENV_FILE
+elif candidate_env_file.name.endswith(".example") and env_name == "production":
+    # Never silently boot production off a placeholder example env file.
+    raise RuntimeError(
+        f"No real env file found for ENVIRONMENT=production; refusing to fall back to "
+        f"placeholder file '{candidate_env_file}'. Create the real env file instead."
+    )
+
+DEFAULT_SECRET_KEY = "change-this-secret-key-in-production-minimum-32-characters"
+DEFAULT_DB_PASSWORD = "ogim_password"
 
 
 class Settings(BaseSettings):
@@ -287,6 +296,27 @@ class Settings(BaseSettings):
     class Config:
         env_file = candidate_env_file
         case_sensitive = True
+
+    @model_validator(mode="after")
+    def _reject_placeholder_secrets_in_production(self) -> "Settings":
+        """Fail fast rather than silently booting production with forgeable secrets."""
+        if self.ENVIRONMENT.lower() != "production":
+            return self
+
+        problems = []
+        if self.SECRET_KEY == DEFAULT_SECRET_KEY or len(self.SECRET_KEY) < 32:
+            problems.append("SECRET_KEY is missing/default/too short (need a real value >= 32 chars)")
+        if DEFAULT_DB_PASSWORD in self.DATABASE_URL:
+            problems.append("DATABASE_URL still contains the default placeholder password")
+        if DEFAULT_DB_PASSWORD in self.TIMESCALE_URL:
+            problems.append("TIMESCALE_URL still contains the default placeholder password")
+
+        if problems:
+            raise ValueError(
+                "Refusing to start with ENVIRONMENT=production and placeholder secrets: "
+                + "; ".join(problems)
+            )
+        return self
 
 
 # Global settings instance

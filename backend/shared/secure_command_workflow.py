@@ -1,15 +1,22 @@
 """
 Secure Command Workflow with 2FA and Digital Twin Simulation
-Two-stage secure command workflow combining 2FA with Digital Twin validation
+Two-stage secure command workflow combining 2FA with Digital Twin validation.
+
+State is persisted on the `commands` row (not an in-memory dict) so it
+survives process restarts and is shared across worker processes/replicas.
 """
 import logging
-import asyncio
 from typing import Dict, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 
 import httpx
-from config import settings
+from sqlalchemy.orm import Session
+
+from .config import settings
+from .models import Command, User
+from .security import verify_2fa_token
+from .kafka_utils import KafkaProducerWrapper, KAFKA_TOPICS, create_low_latency_producer
 
 logger = logging.getLogger(__name__)
 
@@ -17,282 +24,333 @@ logger = logging.getLogger(__name__)
 class CommandStage(Enum):
     """Command workflow stages"""
     REQUESTED = "requested"
-    TWO_FA_PENDING = "two_fa_pending"
     TWO_FA_VERIFIED = "two_fa_verified"
     DIGITAL_TWIN_SIMULATION = "digital_twin_simulation"
     SIMULATION_APPROVED = "simulation_approved"
-    EXECUTION_PENDING = "execution_pending"
     EXECUTED = "executed"
     REJECTED = "rejected"
+    FAILED = "failed"
 
 
 class SecureCommandWorkflow:
     """
-    Secure two-stage command workflow:
+    Secure multi-stage command workflow, backed by the `commands` table:
     1. Two-Factor Authentication (2FA)
     2. Digital Twin Simulation
+    3. Human approval (two-person rule)
+    4. Execution (published to Kafka for SCADA/PLC pickup)
     """
-    
+
     def __init__(self):
-        self.pending_commands: Dict[str, Dict[str, Any]] = {}
-        self.simulation_results: Dict[str, Dict[str, Any]] = {}
         self.digital_twin_service_url = settings.DIGITAL_TWIN_SERVICE_URL
-    
+        self._command_producer: Optional[KafkaProducerWrapper] = None
+        self._critical_command_producer: Optional[KafkaProducerWrapper] = None
+
+    def init_producers(self) -> None:
+        """Create Kafka producers. Call once at service startup."""
+        self._command_producer = KafkaProducerWrapper(KAFKA_TOPICS["CONTROL_COMMANDS"])
+        self._critical_command_producer = create_low_latency_producer(
+            KAFKA_TOPICS["CRITICAL_CONTROL_COMMANDS"]
+        )
+
+    def close_producers(self) -> None:
+        if self._command_producer:
+            self._command_producer.close()
+        if self._critical_command_producer:
+            self._critical_command_producer.close()
+
+    def _get_command(self, db: Session, command_id: str) -> Command:
+        command = db.query(Command).filter(Command.command_id == command_id).first()
+        if not command:
+            raise ValueError(f"Command {command_id} not found")
+        return command
+
     async def initiate_command(
         self,
+        db: Session,
         command_id: str,
         command_type: str,
         parameters: Dict[str, Any],
-        requested_by: str,
+        requested_by_id: int,
         well_name: str,
-        equipment_id: str
+        equipment_id: str,
+        critical: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Initiate secure command workflow
-        
-        Stage 1: Request command (requires 2FA)
-        """
-        command = {
-            "command_id": command_id,
-            "command_type": command_type,
-            "parameters": parameters,
-            "requested_by": requested_by,
-            "well_name": well_name,
-            "equipment_id": equipment_id,
-            "stage": CommandStage.REQUESTED.value,
-            "created_at": datetime.utcnow(),
-            "two_fa_verified": False,
-            "simulation_completed": False,
-            "simulation_approved": False
-        }
-        
-        self.pending_commands[command_id] = command
-        
+        """Stage 1: create the command, awaiting 2FA."""
+        command = Command(
+            command_id=command_id,
+            timestamp=datetime.utcnow(),
+            well_name=well_name,
+            equipment_id=equipment_id,
+            command_type=command_type,
+            parameters=parameters,
+            status="pending",
+            stage=CommandStage.REQUESTED.value,
+            requested_by_id=requested_by_id,
+            requires_two_factor=True,
+            critical=critical,
+        )
+        db.add(command)
+        db.commit()
+
         logger.info(f"Command {command_id} initiated, awaiting 2FA")
-        
+
         return {
             "command_id": command_id,
             "stage": CommandStage.REQUESTED.value,
             "next_step": "two_factor_authentication",
-            "message": "Command requested. Two-factor authentication required."
+            "message": "Command requested. Two-factor authentication required.",
         }
-    
+
     async def verify_two_factor(
         self,
+        db: Session,
         command_id: str,
         two_fa_code: str,
-        user_id: str
+        user: User,
     ) -> Dict[str, Any]:
-        """
-        Stage 2: Verify Two-Factor Authentication
-        
-        In production, this would validate the 2FA code with auth service
-        """
-        if command_id not in self.pending_commands:
-            return {"error": "Command not found"}
-        
-        command = self.pending_commands[command_id]
-        
-        # Verify 2FA (mock implementation - in production, call auth service)
-        # two_fa_valid = await self._validate_2fa_code(user_id, two_fa_code)
-        two_fa_valid = True  # Mock - replace with actual 2FA validation
-        
-        if not two_fa_valid:
-            command["stage"] = CommandStage.REJECTED.value
+        """Stage 2: verify the requester's real TOTP 2FA code."""
+        command = self._get_command(db, command_id)
+
+        if command.stage != CommandStage.REQUESTED.value:
+            return {"error": f"Command is not awaiting 2FA (stage={command.stage})"}
+
+        if not user.two_factor_enabled or not user.two_factor_secret:
+            return {"error": "2FA is not enabled for this user; cannot verify command"}
+
+        if not verify_2fa_token(user.two_factor_secret, two_fa_code):
+            command.stage = CommandStage.REJECTED.value
+            command.status = "rejected"
+            db.commit()
             return {
                 "command_id": command_id,
                 "stage": CommandStage.REJECTED.value,
-                "error": "Invalid 2FA code"
+                "error": "Invalid 2FA code",
             }
-        
-        # Update command
-        command["stage"] = CommandStage.TWO_FA_VERIFIED.value
-        command["two_fa_verified"] = True
-        command["two_fa_verified_at"] = datetime.utcnow()
-        command["two_fa_verified_by"] = user_id
-        
+
+        command.stage = CommandStage.TWO_FA_VERIFIED.value
+        command.two_fa_verified_at = datetime.utcnow()
+        db.commit()
+
         logger.info(f"Command {command_id} - 2FA verified, proceeding to Digital Twin simulation")
-        
-        # Automatically proceed to Digital Twin simulation
-        return await self.run_digital_twin_simulation(command_id)
-    
-    async def run_digital_twin_simulation(
-        self,
-        command_id: str
-    ) -> Dict[str, Any]:
-        """
-        Stage 3: Run Digital Twin simulation before execution
-        
-        Simulates the command in Digital Twin to predict outcomes
-        """
-        if command_id not in self.pending_commands:
-            return {"error": "Command not found"}
-        
-        command = self.pending_commands[command_id]
-        
-        if not command.get("two_fa_verified"):
-            return {
-                "error": "2FA verification required before simulation"
-            }
-        
-        command["stage"] = CommandStage.DIGITAL_TWIN_SIMULATION.value
-        
+
+        return await self.run_digital_twin_simulation(db, command_id)
+
+    async def run_digital_twin_simulation(self, db: Session, command_id: str) -> Dict[str, Any]:
+        """Stage 3: run Digital Twin simulation before execution."""
+        command = self._get_command(db, command_id)
+
+        if command.stage != CommandStage.TWO_FA_VERIFIED.value:
+            return {"error": "2FA verification required before simulation"}
+
         try:
-            # Call Digital Twin service for simulation
             async with httpx.AsyncClient() as client:
                 simulation_request = {
-                    "well_name": command["well_name"],
+                    "well_name": command.well_name,
                     "parameters": {
-                        **command["parameters"],
-                        "command_type": command["command_type"],
-                        "equipment_id": command["equipment_id"]
+                        **(command.parameters or {}),
+                        "command_type": command.command_type,
+                        "equipment_id": command.equipment_id,
                     },
-                    "simulation_type": f"command_simulation_{command['command_type']}"
+                    "simulation_type": f"command_simulation_{command.command_type}",
                 }
-                
+
                 response = await client.post(
                     f"{self.digital_twin_service_url}/simulate",
                     json=simulation_request,
-                    timeout=30.0
+                    timeout=30.0,
                 )
-                
-                if response.status_code == 200:
-                    simulation_result = response.json()
-                    
-                    # Store simulation results
-                    self.simulation_results[command_id] = simulation_result
-                    command["simulation_completed"] = True
-                    command["simulation_result"] = simulation_result
-                    command["simulation_timestamp"] = datetime.utcnow()
-                    
-                    logger.info(f"Command {command_id} - Digital Twin simulation completed")
-                    
-                    return {
-                        "command_id": command_id,
-                        "stage": CommandStage.DIGITAL_TWIN_SIMULATION.value,
-                        "simulation_result": simulation_result,
-                        "next_step": "review_simulation",
-                        "message": "Digital Twin simulation completed. Review results before approval."
-                    }
-                else:
-                    raise Exception(f"Simulation failed: {response.status_code}")
-                    
+
+                if response.status_code != 200:
+                    raise RuntimeError(f"Simulation failed: {response.status_code}")
+
+                simulation_result = response.json()
+                command.stage = CommandStage.DIGITAL_TWIN_SIMULATION.value
+                command.simulation_result = simulation_result
+                db.commit()
+
+                logger.info(f"Command {command_id} - Digital Twin simulation completed")
+
+                return {
+                    "command_id": command_id,
+                    "stage": CommandStage.DIGITAL_TWIN_SIMULATION.value,
+                    "simulation_result": simulation_result,
+                    "next_step": "review_simulation",
+                    "message": "Digital Twin simulation completed. Review results before approval.",
+                }
+
         except Exception as e:
             logger.error(f"Digital Twin simulation error for command {command_id}: {e}")
-            command["stage"] = CommandStage.REJECTED.value
+            command.stage = CommandStage.REJECTED.value
+            command.status = "rejected"
+            db.commit()
             return {
                 "command_id": command_id,
                 "stage": CommandStage.REJECTED.value,
-                "error": f"Simulation failed: {str(e)}"
+                "error": f"Simulation failed: {str(e)}",
             }
-    
+
     async def approve_simulation(
         self,
+        db: Session,
         command_id: str,
-        approved_by: str,
-        approval_notes: Optional[str] = None
+        approver: User,
+        approval_notes: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Stage 4: Approve simulation results
-        
-        After reviewing Digital Twin simulation, approve for execution
-        """
-        if command_id not in self.pending_commands:
-            return {"error": "Command not found"}
-        
-        command = self.pending_commands[command_id]
-        
-        if not command.get("simulation_completed"):
-            return {
-                "error": "Digital Twin simulation must be completed first"
-            }
-        
-        # Check simulation results for safety
-        simulation_result = command.get("simulation_result", {})
+        """Stage 4: approve simulation results. Enforces the two-person rule."""
+        command = self._get_command(db, command_id)
+
+        if command.stage != CommandStage.DIGITAL_TWIN_SIMULATION.value:
+            return {"error": "Digital Twin simulation must be completed first"}
+
+        if command.requested_by_id == approver.id:
+            return {"error": "Cannot approve own command (two-person rule)"}
+
+        simulation_result = command.simulation_result or {}
         results = simulation_result.get("results", {})
-        
-        # Safety checks (example)
-        if results.get("predicted_pressure", 0) > 500:  # Example threshold
+
+        # Safety check (example threshold - tune per well/equipment profile)
+        if results.get("predicted_pressure", 0) > 500:
+            command.stage = CommandStage.REJECTED.value
+            command.status = "rejected"
+            db.commit()
             return {
                 "error": "Simulation predicts unsafe conditions. Command rejected.",
-                "simulation_result": simulation_result
+                "simulation_result": simulation_result,
             }
-        
-        command["stage"] = CommandStage.SIMULATION_APPROVED.value
-        command["simulation_approved"] = True
-        command["approved_by"] = approved_by
-        command["approved_at"] = datetime.utcnow()
-        command["approval_notes"] = approval_notes
-        
-        logger.info(f"Command {command_id} - Simulation approved by {approved_by}")
-        
+
+        command.stage = CommandStage.SIMULATION_APPROVED.value
+        command.status = "approved"
+        command.approved_by_id = approver.id
+        command.approval_notes = approval_notes
+        db.commit()
+
+        logger.info(f"Command {command_id} - Simulation approved by {approver.username}")
+
         return {
             "command_id": command_id,
             "stage": CommandStage.SIMULATION_APPROVED.value,
             "next_step": "execute",
             "message": "Simulation approved. Command ready for execution.",
-            "simulation_result": simulation_result
+            "simulation_result": simulation_result,
         }
-    
-    async def execute_command(
-        self,
-        command_id: str,
-        executor: str
-    ) -> Dict[str, Any]:
-        """
-        Stage 5: Execute command after all validations
-        
-        Only executes if:
-        1. 2FA verified
-        2. Digital Twin simulation completed
-        3. Simulation approved
-        """
-        if command_id not in self.pending_commands:
-            return {"error": "Command not found"}
-        
-        command = self.pending_commands[command_id]
-        
-        # Validate all stages
-        if not command.get("two_fa_verified"):
-            return {"error": "2FA verification required"}
-        
-        if not command.get("simulation_completed"):
-            return {"error": "Digital Twin simulation required"}
-        
-        if not command.get("simulation_approved"):
-            return {"error": "Simulation approval required"}
-        
-        command["stage"] = CommandStage.EXECUTION_PENDING.value
-        command["executed_by"] = executor
-        command["executed_at"] = datetime.utcnow()
-        
-        # In production, send to command-control-service for actual execution
-        # For now, mark as executed
-        command["stage"] = CommandStage.EXECUTED.value
-        
-        logger.info(f"Command {command_id} - Executed successfully")
-        
+
+    def _publish(self, command: Command) -> None:
+        """Publish a command to Kafka for SCADA/PLC pickup. Raises on failure."""
+        command_data = {
+            "command_id": command.command_id,
+            "well_name": command.well_name,
+            "equipment_id": command.equipment_id,
+            "command_type": command.command_type,
+            "parameters": command.parameters,
+        }
+
+        if command.critical and self._critical_command_producer:
+            self._critical_command_producer.send(command.command_id, command_data, flush_immediately=False)
+        elif self._command_producer:
+            self._command_producer.send(command.command_id, command_data)
+            self._command_producer.flush()
+        else:
+            raise RuntimeError("No Kafka producer available")
+
+    async def execute_command(self, db: Session, command_id: str, executor: User) -> Dict[str, Any]:
+        """Stage 5: execute the command by publishing it to Kafka for SCADA/PLC pickup."""
+        command = self._get_command(db, command_id)
+
+        if command.stage != CommandStage.SIMULATION_APPROVED.value:
+            return {"error": "Command must be 2FA-verified, simulated, and approved before execution"}
+
+        command.status = "executing"
+        db.commit()
+
+        try:
+            self._publish(command)
+        except Exception as e:
+            logger.error(f"Failed to publish command {command_id} to Kafka: {e}")
+            command.stage = CommandStage.FAILED.value
+            command.status = "failed"
+            db.commit()
+            return {
+                "command_id": command_id,
+                "stage": CommandStage.FAILED.value,
+                "error": "Failed to execute command",
+            }
+
+        command.stage = CommandStage.EXECUTED.value
+        command.status = "executed"
+        command.executed_at = datetime.utcnow()
+        command.execution_result = {
+            "status": "success",
+            "message": "Command sent to SCADA",
+            "executed_by": executor.username,
+        }
+        db.commit()
+
+        logger.info(f"Command {command_id} - Executed successfully by {executor.username}")
+
         return {
             "command_id": command_id,
             "stage": CommandStage.EXECUTED.value,
             "message": "Command executed successfully",
-            "execution_timestamp": command["executed_at"].isoformat()
+            "execution_timestamp": command.executed_at.isoformat(),
         }
-    
-    def get_command_status(self, command_id: str) -> Optional[Dict[str, Any]]:
+
+    async def execute_immediately(self, db: Session, command: Command, executor: User) -> Dict[str, Any]:
+        """
+        Bypass the 2FA/simulation/approval gates and publish straight to Kafka.
+
+        For emergency-stop style actions only, where requiring 2FA or a second
+        approver would defeat the purpose of an immediate safety action.
+        """
+        command.status = "executing"
+        db.commit()
+
+        try:
+            self._publish(command)
+        except Exception as e:
+            logger.error(f"Failed to publish emergency command {command.command_id} to Kafka: {e}")
+            command.stage = CommandStage.FAILED.value
+            command.status = "failed"
+            db.commit()
+            return {
+                "command_id": command.command_id,
+                "stage": CommandStage.FAILED.value,
+                "error": "Failed to execute command",
+            }
+
+        command.stage = CommandStage.EXECUTED.value
+        command.status = "executed"
+        command.executed_at = datetime.utcnow()
+        command.execution_result = {
+            "status": "success",
+            "message": "Command sent to SCADA",
+            "executed_by": executor.username,
+        }
+        db.commit()
+
+        logger.critical(f"Command {command.command_id} - Executed immediately by {executor.username} (no approval gate)")
+
+        return {
+            "command_id": command.command_id,
+            "stage": CommandStage.EXECUTED.value,
+            "message": "Command executed successfully",
+            "execution_timestamp": command.executed_at.isoformat(),
+        }
+
+    def get_command_status(self, db: Session, command_id: str) -> Optional[Dict[str, Any]]:
         """Get current status of a command"""
-        if command_id not in self.pending_commands:
+        command = db.query(Command).filter(Command.command_id == command_id).first()
+        if not command:
             return None
-        
-        command = self.pending_commands[command_id].copy()
-        
-        # Add simulation result if available
-        if command_id in self.simulation_results:
-            command["simulation_result"] = self.simulation_results[command_id]
-        
-        return command
+
+        return {
+            "command_id": command.command_id,
+            "stage": command.stage,
+            "status": command.status,
+            "simulation_result": command.simulation_result,
+        }
 
 
-# Global instance
+# Global instance. Call init_producers()/close_producers() from each
+# service's startup/shutdown events before using execute_command().
 secure_command_workflow = SecureCommandWorkflow()
-

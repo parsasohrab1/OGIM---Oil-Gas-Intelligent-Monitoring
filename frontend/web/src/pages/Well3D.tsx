@@ -1,9 +1,10 @@
-import { Suspense, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, Text, Html, Environment } from '@react-three/drei'
 import * as THREE from 'three'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { well3DAPI, digitalTwinAPI } from '../api/services'
+import ErrorState from '../components/ErrorState'
 import './Well3D.css'
 
 interface DepthData {
@@ -74,90 +75,6 @@ interface Well3DData {
   bop?: BOPData
   casings?: CasingData[]
   wellheadEquipment?: WellheadEquipment
-}
-
-// Generate mock well data - moved outside component for reuse
-function generateMockWellData(wellName: string): Well3DData {
-  return {
-    wellName,
-    totalDepth: 3000,
-    depthData: Array.from({ length: 20 }, (_, i) => ({
-      depth: (i / 20) * 3000,
-      pressure: 1000 + (i / 20) * 2000 + Math.random() * 100,
-      temperature: 25 + (i / 20) * 100 + Math.random() * 10,
-      flowRate: 100 + Math.random() * 50,
-      status: Math.random() > 0.8 ? 'warning' : Math.random() > 0.95 ? 'critical' : 'normal'
-    })),
-    surfaceData: {
-      wellheadPressure: 500 + Math.random() * 100,
-      wellheadTemperature: 30 + Math.random() * 10,
-      flowRate: 150 + Math.random() * 50
-    },
-    bop: {
-      type: 'Annular BOP',
-      pressureRating: 10000,
-      stackHeight: 3.5,
-      status: 'open'
-    },
-    casings: [
-      {
-        depth: 200,
-        outerDiameter: 20,
-        innerDiameter: 18.5,
-        type: 'conductor',
-        cementThickness: 1.5
-      },
-      {
-        depth: 800,
-        outerDiameter: 13.375,
-        innerDiameter: 12.415,
-        type: 'surface',
-        cementThickness: 1.2
-      },
-      {
-        depth: 2000,
-        outerDiameter: 9.625,
-        innerDiameter: 8.681,
-        type: 'intermediate',
-        cementThickness: 1.0
-      },
-      {
-        depth: 3000,
-        outerDiameter: 7,
-        innerDiameter: 6.276,
-        type: 'production',
-        cementThickness: 0.8
-      }
-    ],
-    wellheadEquipment: {
-      christmasTree: {
-        height: 2.5,
-        width: 1.2,
-        status: 'open'
-      },
-      masterValve: {
-        position: 100,
-        status: 'open'
-      },
-      wingValve: {
-        position: 75,
-        status: 'open'
-      },
-      chokeValve: {
-        position: 50,
-        status: 'open'
-      },
-      pressureGauges: [
-        { name: 'Wellhead Pressure', value: 2500 + Math.random() * 500, unit: 'psi' },
-        { name: 'Tubing Pressure', value: 2300 + Math.random() * 400, unit: 'psi' },
-        { name: 'Casing Pressure', value: 500 + Math.random() * 200, unit: 'psi' }
-      ],
-      flowMeter: {
-        flowRate: 850 + Math.random() * 200,
-        unit: 'bbl/day'
-      }
-    }
-  }
 }
 
 // Wellhead Equipment Component - تجهیزات سر چاهی
@@ -664,7 +581,7 @@ function DepthLabels({ depth, segments }: { depth: number; segments: number }) {
 }
 
 // Multiple Wells Scene - نمایش چند چاه
-function MultipleWellsScene({ wellsData, wells }: { wellsData: Record<string, Well3DData>; wells: string[] }) {
+function MultipleWellsScene({ wellsData, wells }: { wellsData: Record<string, Well3DData | null>; wells: string[] }) {
   const controlsRef = useRef<any>(null)
   const spacing = 15 // فاصله بین چاه‌ها
 
@@ -693,13 +610,25 @@ function MultipleWellsScene({ wellsData, wells }: { wellsData: Record<string, We
 
       {/* Render all wells */}
       {wells.map((wellName, index) => {
-        // Use mock data if wellData is not available
-        const wellData = wellsData[wellName] || generateMockWellData(wellName)
+        const wellData = wellsData[wellName]
 
         const row = Math.floor(index / 2)
         const col = index % 2
         const x = (col - 0.5) * spacing
         const z = (row - 0.5) * spacing
+
+        if (!wellData) {
+          return (
+            <group key={wellName} position={[x, 0, z]}>
+              <Text position={[0, 5, 0]} fontSize={0.5} color="#ffffff" anchorX="center" anchorY="middle">
+                {wellName}
+              </Text>
+              <Text position={[0, 3.5, 0]} fontSize={0.35} color="#f87171" anchorX="center" anchorY="middle">
+                Data unavailable
+              </Text>
+            </group>
+          )
+        }
 
         return (
           <group key={wellName} position={[x, 0, z]}>
@@ -842,53 +771,54 @@ export default function Well3D() {
   })
 
   // Fetch list of wells from Wells page data
-  const { data: wellsResponse } = useQuery({
+  const { data: wellsResponse, isError: isWellsListError, refetch: refetchWellsList } = useQuery({
     queryKey: ['wells-list-3d'],
     queryFn: async () => {
-      try {
-        const response = await well3DAPI.getWells()
-        return Array.isArray(response) ? response : response?.wells || []
-      } catch (error) {
-        if (import.meta.env.DEV) {
-          console.debug('Wells service unavailable')
-        }
-        // Fallback to default wells
-        return ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
-      }
+      const response = await well3DAPI.getWells()
+      return Array.isArray(response) ? response : response?.wells || []
     },
   })
 
-  const wells: string[] = Array.isArray(wellsResponse) && wellsResponse.length > 0
-    ? wellsResponse
-    : ['PROD-001', 'PROD-002', 'DEV-001', 'OBS-001']
+  const wells: string[] = Array.isArray(wellsResponse) ? wellsResponse : []
+
+  useEffect(() => {
+    if (wells.length > 0 && !wells.includes(selectedWell)) {
+      setSelectedWell(wells[0])
+    }
+  }, [wells, selectedWell])
 
   // Fetch well data for selected well
-  const { data: wellData, isLoading, error } = useQuery({
+  const { data: wellData, isLoading, error, refetch: refetchWellData } = useQuery({
     queryKey: ['well3d', selectedWell],
     queryFn: () => well3DAPI.getWellData(selectedWell),
     refetchInterval: 5000, // Refresh every 5 seconds
+    enabled: !!selectedWell,
   })
 
   // Fetch data for all wells (for multiple view)
   const { data: allWellsData } = useQuery({
     queryKey: ['wells3d-all', wells],
     queryFn: async () => {
-      const wellsData: Record<string, Well3DData> = {}
+      const wellsData: Record<string, Well3DData | null> = {}
       for (const wellName of wells) {
         try {
-          const data = await well3DAPI.getWellData(wellName)
-          // Use mock data if API returns null/undefined (network error)
-          wellsData[wellName] = data ?? generateMockWellData(wellName)
+          wellsData[wellName] = (await well3DAPI.getWellData(wellName)) ?? null
         } catch (error) {
-          // Use mock data if API fails
-          wellsData[wellName] = generateMockWellData(wellName)
+          wellsData[wellName] = null
         }
       }
       return wellsData
     },
-    enabled: viewMode === 'multiple',
+    enabled: viewMode === 'multiple' && wells.length > 0,
   })
 
+  if (isWellsListError) {
+    return (
+      <div className="well3d-container">
+        <ErrorState message="Unable to load the wells list." onRetry={() => refetchWellsList()} />
+      </div>
+    )
+  }
 
   if (isLoading && viewMode === 'single') {
     return (
@@ -898,23 +828,19 @@ export default function Well3D() {
     )
   }
 
-  if (error && viewMode === 'single') {
+  if ((error || !wellData) && viewMode === 'single') {
     return (
       <div className="well3d-container">
-        <div className="error">Error loading well data. Using mock data...</div>
-        {wellData && (
-          <Canvas className="well3d-canvas">
-            <Suspense fallback={null}>
-              <WellScene data={wellData} />
-            </Suspense>
-          </Canvas>
-        )}
+        <ErrorState message={`Unable to load 3D data for ${selectedWell}.`} onRetry={() => refetchWellData()} />
       </div>
     )
   }
 
-  // Use mock data if API fails
-  const displayData: Well3DData = wellData ?? generateMockWellData(selectedWell)
+  const displayData: Well3DData | undefined = wellData
+
+  if (viewMode === 'single' && !displayData) {
+    return null
+  }
 
   return (
     <div className="well3d-container">
@@ -955,7 +881,7 @@ export default function Well3D() {
           </label>
         </div>
         <div className="well-info">
-          {viewMode === 'single' ? (
+          {viewMode === 'single' && displayData ? (
             <>
               <h2>{displayData.wellName}</h2>
               <p>Total Depth: {displayData.totalDepth.toFixed(0)} m</p>
@@ -972,9 +898,9 @@ export default function Well3D() {
       <div className="well3d-viewport">
         <Canvas className="well3d-canvas" shadows>
           <Suspense fallback={null}>
-            {viewMode === 'single' ? (
+            {viewMode === 'single' && displayData ? (
               <WellScene data={displayData} />
-            ) : (
+            ) : viewMode === 'single' ? null : (
               <MultipleWellsScene wellsData={allWellsData || {}} wells={wells} />
             )}
           </Suspense>
@@ -998,57 +924,61 @@ export default function Well3D() {
           </div>
         </div>
         
-        {displayData.bop && (
-          <div className="legend-section">
-            <h3>BOP Status</h3>
-            <div className="legend-item">
-              <div className="legend-color" style={{ background: displayData.bop.status === 'open' ? '#00ff00' : displayData.bop.status === 'closed' ? '#ff0000' : '#ffaa00' }}></div>
-              <span>{displayData.bop.type} - {displayData.bop.status.toUpperCase()}</span>
-            </div>
-            <div className="legend-item">
-              <span style={{ fontSize: '12px', opacity: 0.8 }}>Rating: {displayData.bop.pressureRating.toLocaleString()} psi</span>
-            </div>
-          </div>
-        )}
-
-        {displayData.casings && displayData.casings.length > 0 && (
-          <div className="legend-section">
-            <h3>Casing Types</h3>
-            {displayData.casings.map((casing, index) => {
-              const getCasingColor = () => {
-                switch (casing.type) {
-                  case 'conductor': return '#8b4513'
-                  case 'surface': return '#4169e1'
-                  case 'intermediate': return '#32cd32'
-                  case 'production': return '#ff6347'
-                  default: return '#808080'
-                }
-              }
-              return (
-                <div key={index} className="legend-item">
-                  <div className="legend-color" style={{ background: getCasingColor() }}></div>
-                  <span>{casing.type.toUpperCase()}: {casing.outerDiameter}" OD / {casing.innerDiameter}" ID (0-{casing.depth}m)</span>
+        {displayData && (
+          <>
+            {displayData.bop && (
+              <div className="legend-section">
+                <h3>BOP Status</h3>
+                <div className="legend-item">
+                  <div className="legend-color" style={{ background: displayData.bop.status === 'open' ? '#00ff00' : displayData.bop.status === 'closed' ? '#ff0000' : '#ffaa00' }}></div>
+                  <span>{displayData.bop.type} - {displayData.bop.status.toUpperCase()}</span>
                 </div>
-              )
-            })}
-          </div>
-        )}
-
-        {displayData.riskZones && displayData.riskZones.length > 0 && (
-          <div className="legend-section">
-            <h3>Risk Zones</h3>
-            {displayData.riskZones.map((zone, idx) => (
-              <div key={idx} className="legend-item">
-                <div
-                  className="legend-color"
-                  style={{ background: zone.severity === 'critical' ? '#ff0000' : '#ffaa00' }}
-                ></div>
-                <span>
-                  {zone.name}: {zone.fromDepth}m - {zone.toDepth}m
-                </span>
+                <div className="legend-item">
+                  <span style={{ fontSize: '12px', opacity: 0.8 }}>Rating: {displayData.bop.pressureRating.toLocaleString()} psi</span>
+                </div>
               </div>
-            ))}
-          </div>
+            )}
+
+            {displayData.casings && displayData.casings.length > 0 && (
+              <div className="legend-section">
+                <h3>Casing Types</h3>
+                {displayData.casings.map((casing, index) => {
+                  const getCasingColor = () => {
+                    switch (casing.type) {
+                      case 'conductor': return '#8b4513'
+                      case 'surface': return '#4169e1'
+                      case 'intermediate': return '#32cd32'
+                      case 'production': return '#ff6347'
+                      default: return '#808080'
+                    }
+                  }
+                  return (
+                    <div key={index} className="legend-item">
+                      <div className="legend-color" style={{ background: getCasingColor() }}></div>
+                      <span>{casing.type.toUpperCase()}: {casing.outerDiameter}" OD / {casing.innerDiameter}" ID (0-{casing.depth}m)</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {displayData.riskZones && displayData.riskZones.length > 0 && (
+              <div className="legend-section">
+                <h3>Risk Zones</h3>
+                {displayData.riskZones.map((zone, idx) => (
+                  <div key={idx} className="legend-item">
+                    <div
+                      className="legend-color"
+                      style={{ background: zone.severity === 'critical' ? '#ff0000' : '#ffaa00' }}
+                    ></div>
+                    <span>
+                      {zone.name}: {zone.fromDepth}m - {zone.toDepth}m
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -1068,13 +998,14 @@ export default function Well3D() {
             </label>
             <button
               onClick={() =>
+                displayData &&
                 whatIfMutation.mutate({
                   flow_rate: displayData.surfaceData.flowRate,
                   pressure: displayData.surfaceData.wellheadPressure,
                   temperature: displayData.surfaceData.wellheadTemperature,
                 })
               }
-              disabled={whatIfMutation.isPending}
+              disabled={whatIfMutation.isPending || !displayData}
             >
               {whatIfMutation.isPending ? 'Simulating...' : 'Run Simulation'}
             </button>

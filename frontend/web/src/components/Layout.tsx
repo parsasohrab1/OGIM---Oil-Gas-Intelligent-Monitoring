@@ -1,5 +1,6 @@
 import { ReactNode } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 import './Layout.css'
 
 interface LayoutProps {
@@ -8,7 +9,14 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
-  
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
+
   return (
     <div className="layout">
       <nav className="navbar">
@@ -16,6 +24,12 @@ export default function Layout({ children }: LayoutProps) {
           <h1>OGIM</h1>
           <span>Oil & Gas Intelligent Monitoring</span>
         </div>
+        {user && (
+          <div className="nav-user">
+            <span>{user.username} ({user.role})</span>
+            <button onClick={handleLogout}>Logout</button>
+          </div>
+        )}
         <div className="nav-links">
           <Link 
             to="/" 

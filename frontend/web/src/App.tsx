@@ -1,6 +1,9 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AuthProvider } from './context/AuthContext'
+import RequireAuth from './components/RequireAuth'
 import Layout from './components/Layout'
+import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Alerts from './pages/Alerts'
 import Wells from './pages/Wells'
@@ -36,32 +39,44 @@ function App() {
           v7_relativeSplatPath: true,
         }}
       >
-        <Layout>
+        <AuthProvider>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/alerts" element={<Alerts />} />
-            <Route path="/wells" element={<Wells />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/dvr" element={<DVR />} />
-            <Route path="/remote-operations" element={<RemoteOperations />} />
-            <Route path="/data-variables" element={<DataVariables />} />
-            <Route path="/maintenance" element={<Maintenance />} />
-            <Route path="/scada" element={<SCADA />} />
-            <Route path="/lstm-forecast" element={<LSTMForecast />} />
-            <Route path="/storage-optimization" element={<StorageOptimization />} />
-            <Route path="/well3d" element={<Well3D />} />
-            <Route path="/edge-computing" element={<EdgeComputing />} />
-            <Route path="/federated-learning" element={<FederatedLearning />} />
-            <Route path="/ar-integration" element={<ARIntegration />} />
-            <Route path="/blockchain-audit" element={<BlockchainAudit />} />
-            <Route path="/data-quality-lineage" element={<DataQualityLineage />} />
-            <Route path="/workflow-automation" element={<WorkflowAutomation />} />
-            <Route path="/ml-models" element={<MLModels />} />
-            <Route path="/performance" element={<Performance />} />
-            <Route path="/report-builder" element={<ReportBuilder />} />
-            <Route path="/security" element={<SecurityCenter />} />
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/*"
+              element={
+                <RequireAuth>
+                  <Layout>
+                    <Routes>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/alerts" element={<Alerts />} />
+                      <Route path="/wells" element={<Wells />} />
+                      <Route path="/reports" element={<Reports />} />
+                      <Route path="/dvr" element={<DVR />} />
+                      <Route path="/remote-operations" element={<RemoteOperations />} />
+                      <Route path="/data-variables" element={<DataVariables />} />
+                      <Route path="/maintenance" element={<Maintenance />} />
+                      <Route path="/scada" element={<SCADA />} />
+                      <Route path="/lstm-forecast" element={<LSTMForecast />} />
+                      <Route path="/storage-optimization" element={<StorageOptimization />} />
+                      <Route path="/well3d" element={<Well3D />} />
+                      <Route path="/edge-computing" element={<EdgeComputing />} />
+                      <Route path="/federated-learning" element={<FederatedLearning />} />
+                      <Route path="/ar-integration" element={<ARIntegration />} />
+                      <Route path="/blockchain-audit" element={<BlockchainAudit />} />
+                      <Route path="/data-quality-lineage" element={<DataQualityLineage />} />
+                      <Route path="/workflow-automation" element={<WorkflowAutomation />} />
+                      <Route path="/ml-models" element={<MLModels />} />
+                      <Route path="/performance" element={<Performance />} />
+                      <Route path="/report-builder" element={<ReportBuilder />} />
+                      <Route path="/security" element={<SecurityCenter />} />
+                    </Routes>
+                  </Layout>
+                </RequireAuth>
+              }
+            />
           </Routes>
-        </Layout>
+        </AuthProvider>
       </Router>
     </QueryClientProvider>
   )

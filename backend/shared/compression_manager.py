@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import timescale_engine
+from .sql_safety import validate_hypertable_name, validate_column_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,10 @@ class CompressionManager:
                 conn = timescale_engine.connect()
             
             try:
-                segmentby = segmentby_column or self.compression_segmentby
-                orderby = orderby_column or 'timestamp DESC'
-                
+                table_name = validate_hypertable_name(conn, table_name)
+                segmentby = validate_column_identifier(segmentby_column or self.compression_segmentby)
+                orderby = validate_column_identifier(orderby_column or 'timestamp DESC')
+
                 query = f"""
                     ALTER TABLE {table_name} SET (
                         timescaledb.compress,
@@ -83,8 +85,9 @@ class CompressionManager:
                 conn = timescale_engine.connect()
             
             try:
+                table_name = validate_hypertable_name(conn, table_name)
                 compress_after = timedelta(days=compress_after_days)
-                
+
                 if if_not_exists:
                     # Check if policy already exists
                     check_query = f"""
@@ -139,6 +142,7 @@ class CompressionManager:
                 conn = timescale_engine.connect()
             
             try:
+                table_name = validate_hypertable_name(conn, table_name)
                 query = f"""
                     SELECT remove_compression_policy('{table_name}', if_exists => true);
                 """
@@ -171,6 +175,8 @@ class CompressionManager:
                 conn = timescale_engine.connect()
             
             try:
+                table_name = validate_hypertable_name(conn, table_name)
+
                 # Get compression settings
                 settings_query = f"""
                     SELECT 
@@ -293,8 +299,9 @@ class CompressionManager:
                 conn = timescale_engine.connect()
             
             try:
+                table_name = validate_hypertable_name(conn, table_name)
                 cutoff_time = datetime.utcnow() - timedelta(days=older_than_days)
-                
+
                 # Find chunks to compress
                 chunks_query = f"""
                     SELECT chunk_name, range_start, range_end
@@ -352,8 +359,9 @@ class CompressionManager:
                 conn = timescale_engine.connect()
             
             try:
+                table_name = validate_hypertable_name(conn, table_name)
                 query = f"""
-                    SELECT 
+                    SELECT
                         chunk_name,
                         range_start,
                         range_end,

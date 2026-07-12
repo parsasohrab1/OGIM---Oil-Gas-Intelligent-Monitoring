@@ -110,10 +110,24 @@
   color: #721c24;
 }
 
+.status-badge.unknown {
+  background: #e2e3e5;
+  color: #383d41;
+}
+
 .well-card-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.well-data-unavailable {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #fff3cd;
+  color: #856404;
+  font-size: 0.85em;
 }
 
 .well-metric {
