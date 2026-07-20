@@ -2,12 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY shared/requirements.txt ./shared-requirements.txt
+COPY digital-twin-service/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r shared-requirements.txt -r requirements.txt
 
-COPY main.py .
+COPY shared ./shared
+COPY digital-twin-service/*.py .
 
 EXPOSE 8008
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8008"]
-

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, Text, Html, Environment } from '@react-three/drei'
 import * as THREE from 'three'
@@ -779,7 +779,10 @@ export default function Well3D() {
     },
   })
 
-  const wells: string[] = Array.isArray(wellsResponse) ? wellsResponse : []
+  const wells: string[] = useMemo(
+    () => (Array.isArray(wellsResponse) ? wellsResponse : []),
+    [wellsResponse]
+  )
 
   useEffect(() => {
     if (wells.length > 0 && !wells.includes(selectedWell)) {

@@ -7,14 +7,16 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "reporting-service"))
 
-from main import app, reports_db  # type: ignore
+from main import app, reports_db, auto_data_quality_reports_db  # type: ignore
 
 
 @pytest.fixture(autouse=True)
 def clear_reports_db():
     reports_db.clear()
+    auto_data_quality_reports_db.clear()
     yield
     reports_db.clear()
+    auto_data_quality_reports_db.clear()
 
 
 @pytest.fixture
@@ -96,3 +98,41 @@ def test_bi_connectors(client):
     body = response.json()
     assert "power_bi" in body
     assert "tableau" in body
+
+
+# ---------- Data Quality + Lineage ----------
+
+
+def test_data_quality_lineage(client):
+    """POST /reports/data-quality-lineage returns quality scores and lineage graph."""
+    response = client.post(
+        "/reports/data-quality-lineage", json={"lookback_hours": 2}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "quality" in body
+    q = body["quality"]
+    for key in ("overall_score", "completeness", "validity", "timeliness", "consistency"):
+        assert key in q
+    assert 0 <= q["overall_score"] <= 1
+    assert "lineage" in body
+    assert "nodes" in body["lineage"]
+    assert "edges" in body["lineage"]
+
+
+def test_auto_data_quality_lineage(client):
+    """POST then GET auto data-quality-lineage reports."""
+    post_resp = client.post(
+        "/reports/data-quality-lineage/auto", json={"lookback_hours": 2}
+    )
+    assert post_resp.status_code == 200
+    report = post_resp.json()
+    assert "report" in report
+    assert "quality" in report["report"]
+
+    get_resp = client.get("/reports/data-quality-lineage/auto", params={"limit": 5})
+    assert get_resp.status_code == 200
+    body = get_resp.json()
+    assert body["count"] >= 1
+    assert len(body["reports"]) >= 1
+    assert "quality" in body["reports"][0]["report"]

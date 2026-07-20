@@ -4,7 +4,9 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "command-control-service"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "command-control-service")
+)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from main import app, require_command_read, require_command_admin  # type: ignore
@@ -21,12 +23,29 @@ def override_get_db(test_db):
     return _override
 
 
+class _FakeProducer:
+    """Stands in for the Kafka producer so tests don't need a real broker."""
+
+    def send(self, *args, **kwargs):
+        pass
+
+    def flush(self, *args, **kwargs):
+        pass
+
+
 @pytest.fixture
 def client(test_db, test_user, admin_user, monkeypatch):
     app.dependency_overrides[get_db] = override_get_db(test_db)
-    app.dependency_overrides[require_command_read] = lambda: {"sub": test_user.username, "role": test_user.role}
-    app.dependency_overrides[require_command_admin] = lambda: {"sub": admin_user.username, "role": admin_user.role}
-    monkeypatch.setattr("main.command_producer", None)
+    app.dependency_overrides[require_command_read] = lambda: {
+        "sub": test_user.username,
+        "role": test_user.role,
+    }
+    app.dependency_overrides[require_command_admin] = lambda: {
+        "sub": admin_user.username,
+        "role": admin_user.role,
+    }
+    monkeypatch.setattr("main.command_producer", _FakeProducer())
+    monkeypatch.setattr("main.critical_command_producer", _FakeProducer())
     test_client = TestClient(app)
     yield test_client
     app.dependency_overrides.clear()

@@ -10,22 +10,26 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import numpy as np
 
-# Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# Add backend directory to path so `shared` can be imported as a package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import settings
-from logging_config import setup_logging
+from shared.config import settings
+from shared.logging_config import setup_logging
 from shared.auth import require_roles
-from metrics import setup_metrics
-from tracing import setup_tracing
+from shared.metrics import setup_metrics
+from shared.tracing import setup_tracing
 from rul_model import rul_model_manager
+
+# Setup logging
+logger = setup_logging("ml-inference-service")
 
 # Import advanced LSTM model
 try:
     from advanced_lstm_model import AdvancedLSTMModel, get_well_model
+
     ADVANCED_LSTM_AVAILABLE = True
 except ImportError:
     ADVANCED_LSTM_AVAILABLE = False
@@ -53,9 +57,6 @@ try:
 except ImportError:  # pragma: no cover - dependency optional at runtime
     METRICS_ENABLED = False
     INFERENCE_REQUESTS = INFERENCE_ERRORS = INFERENCE_LATENCY = None  # type: ignore
-
-# Setup logging
-logger = setup_logging("ml-inference-service")
 
 # Import MLflow integration
 try:
@@ -163,10 +164,24 @@ class ABTestConfigRequest(BaseModel):
 class DriftBaselineRequest(BaseModel):
     features: List[Dict[str, float]]
 
+    @field_validator("features", mode="before")
+    @classmethod
+    def normalize_features(cls, value: Any) -> List[Dict[str, float]]:
+        if isinstance(value, dict):
+            return [value]
+        return value
+
 
 class DriftDetectRequest(BaseModel):
     features: List[Dict[str, float]]
     threshold: float = 0.5
+
+    @field_validator("features", mode="before")
+    @classmethod
+    def normalize_features(cls, value: Any) -> List[Dict[str, float]]:
+        if isinstance(value, dict):
+            return [value]
+        return value
 
 
 @app.on_event("startup")
@@ -174,7 +189,7 @@ async def startup_event():
     """Initialize MLflow manager on startup"""
     global mlflow_manager
     logger.info("Starting ML inference service...")
-    
+
     if MLFLOW_AVAILABLE:
         try:
             mlflow_manager = get_mlflow_manager(
@@ -197,14 +212,14 @@ def mock_anomaly_detection(features: Dict[str, float]) -> Dict[str, float]:
             anomaly_score += 0.3
         elif abs(value) > 50:
             anomaly_score += 0.1
-    
+
     anomaly_score = min(1.0, anomaly_score)
     is_anomaly = 1.0 if anomaly_score > 0.5 else 0.0
-    
+
     return {
         "prediction": is_anomaly,
         "anomaly_score": anomaly_score,
-        "probability": anomaly_score
+        "probability": anomaly_score,
     }
 
 
@@ -216,13 +231,13 @@ def mock_failure_prediction(features: Dict[str, float]) -> Dict[str, float]:
             failure_prob += 0.2
         elif value > 150:
             failure_prob += 0.1
-    
+
     failure_prob = min(1.0, failure_prob)
-    
+
     return {
         "prediction": failure_prob,
         "failure_probability": failure_prob,
-        "probability": failure_prob
+        "probability": failure_prob,
     }
 
 
@@ -238,7 +253,10 @@ async def infer(request: InferenceRequest):
         selected_version = request.model_version
         deployment_variant = "default"
         if MLFLOW_AVAILABLE and mlflow_manager and request.model_version is None:
-            selected_version, deployment_variant = mlflow_manager.resolve_model_for_request(
+            (
+                selected_version,
+                deployment_variant,
+            ) = mlflow_manager.resolve_model_for_request(
                 request.model_type,
                 request.sensor_id,
             )
@@ -246,16 +264,22 @@ async def infer(request: InferenceRequest):
         # Use MLflow models if available, otherwise fallback to mock
         if MLFLOW_AVAILABLE and mlflow_manager:
             if request.model_type == "anomaly_detection":
-                result = mlflow_manager.predict_anomaly(request.features, version=selected_version)
+                result = mlflow_manager.predict_anomaly(
+                    request.features, version=selected_version
+                )
             elif request.model_type == "failure_prediction":
-                result = mlflow_manager.predict_failure(request.features, version=selected_version)
+                result = mlflow_manager.predict_failure(
+                    request.features, version=selected_version
+                )
             elif request.model_type == "time_series_forecast":
                 raise HTTPException(
                     status_code=400,
-                    detail="Use /forecast endpoint for time series predictions"
+                    detail="Use /forecast endpoint for time series predictions",
                 )
             else:
-                raise HTTPException(status_code=400, detail=f"Unknown model type: {request.model_type}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown model type: {request.model_type}"
+                )
         else:
             # Fallback to mock models
             if request.model_type == "anomaly_detection":
@@ -265,13 +289,15 @@ async def infer(request: InferenceRequest):
             elif request.model_type == "time_series_forecast":
                 raise HTTPException(
                     status_code=400,
-                    detail="Use /forecast endpoint for time series predictions"
+                    detail="Use /forecast endpoint for time series predictions",
                 )
             else:
-                raise HTTPException(status_code=400, detail=f"Unknown model type: {request.model_type}")
-        
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown model type: {request.model_type}"
+                )
+
         logger.info(f"Inference completed for {request.sensor_id}")
-        
+
         return InferenceResponse(
             sensor_id=request.sensor_id,
             model_type=request.model_type,
@@ -281,7 +307,7 @@ async def infer(request: InferenceRequest):
             failure_probability=result.get("failure_probability"),
             model_version=selected_version,
             deployment_variant=deployment_variant,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
     except RuntimeError as exc:
         logger.warning("Inference unavailable for %s: %s", request.model_type, exc)
@@ -324,15 +350,21 @@ async def forecast_time_series(request: TimeSeriesForecastRequest):
         # Try advanced LSTM first
         if ADVANCED_LSTM_AVAILABLE:
             # Extract well name from sensor_id (assuming format: WELL-SENSOR)
-            well_name = request.sensor_id.split('-')[0] if '-' in request.sensor_id else "default"
+            well_name = (
+                request.sensor_id.split("-")[0]
+                if "-" in request.sensor_id
+                else "default"
+            )
             model = get_well_model(well_name, model_type="stacked_lstm")
-            
+
             if model.is_trained:
                 historical_array = np.array(request.historical_data)
-                result = model.predict(historical_array, forecast_steps=request.forecast_steps)
-                
+                result = model.predict(
+                    historical_array, forecast_steps=request.forecast_steps
+                )
+
                 logger.info(f"Advanced LSTM forecast completed for {request.sensor_id}")
-                
+
                 return TimeSeriesForecastResponse(
                     sensor_id=request.sensor_id,
                     predictions=result["predictions"],
@@ -342,19 +374,19 @@ async def forecast_time_series(request: TimeSeriesForecastRequest):
                     timestamp=datetime.utcnow(),
                     confidence_lower=result.get("confidence_lower"),
                     confidence_upper=result.get("confidence_upper"),
-                    model_type=result.get("model_type")
+                    model_type=result.get("model_type"),
                 )
-        
+
         # Fallback to MLflow model
         if not (MLFLOW_AVAILABLE and mlflow_manager):
             raise HTTPException(
                 status_code=503,
-                detail="LSTM models not available. Please train a model first."
+                detail="LSTM models not available. Please train a model first.",
             )
 
         result = mlflow_manager.predict_time_series(
             historical_data=request.historical_data,
-            forecast_steps=request.forecast_steps
+            forecast_steps=request.forecast_steps,
         )
 
         logger.info(f"Time series forecast completed for {request.sensor_id}")
@@ -365,7 +397,7 @@ async def forecast_time_series(request: TimeSeriesForecastRequest):
             forecast_steps=result["forecast_steps"],
             sequence_length=result["sequence_length"],
             confidence=result["confidence"],
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
     except ValueError as e:
         logger.warning("Invalid input for time series forecast: %s", e)
@@ -391,44 +423,44 @@ async def forecast_time_series(request: TimeSeriesForecastRequest):
 @app.post("/lstm/train", response_model=TrainLSTMResponse)
 async def train_lstm_model(
     request: TrainLSTMRequest,
-    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"}))
+    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer"})),
 ):
     """Train advanced LSTM model for a specific well"""
     if not ADVANCED_LSTM_AVAILABLE:
         raise HTTPException(
             status_code=503,
-            detail="Advanced LSTM models not available. TensorFlow is required."
+            detail="Advanced LSTM models not available. TensorFlow is required.",
         )
-    
+
     try:
         # Get or create model for this well
         model = get_well_model(request.well_name, model_type=request.model_type)
-        
+
         # Prepare data
         data_array = np.array(request.time_series_data).reshape(-1, 1)
-        
+
         # Create sequences
         X, y = [], []
         seq_len = request.sequence_length
         forecast_horizon = request.forecast_horizon
-        
+
         for i in range(len(data_array) - seq_len - forecast_horizon + 1):
-            X.append(data_array[i:(i + seq_len)])
-            y.append(data_array[i + seq_len:i + seq_len + forecast_horizon])
-        
+            X.append(data_array[i : (i + seq_len)])
+            y.append(data_array[i + seq_len : i + seq_len + forecast_horizon])
+
         X = np.array(X)
         y = np.array(y)
-        
+
         if len(X) == 0:
             raise ValueError(
                 f"Not enough data. Need at least {seq_len + forecast_horizon} points, "
                 f"got {len(data_array)}"
             )
-        
+
         # Update model parameters
         model.sequence_length = seq_len
         model.forecast_horizon = forecast_horizon
-        
+
         # Train model
         metrics = model.train(
             X_train=X,
@@ -436,18 +468,18 @@ async def train_lstm_model(
             epochs=request.epochs,
             batch_size=request.batch_size,
             validation_split=request.validation_split,
-            verbose=0
+            verbose=0,
         )
-        
+
         logger.info(f"LSTM model trained for well {request.well_name}: {metrics}")
-        
+
         return TrainLSTMResponse(
             well_name=request.well_name,
             model_type=request.model_type,
             training_status="completed",
             metrics=metrics,
             epochs_trained=metrics.get("epochs_trained", request.epochs),
-            message=f"Model trained successfully for {request.well_name}"
+            message=f"Model trained successfully for {request.well_name}",
         )
     except ValueError as e:
         logger.warning(f"Invalid input for LSTM training: {e}")
@@ -459,30 +491,31 @@ async def train_lstm_model(
 
 @app.get("/lstm/models")
 async def list_lstm_models(
-    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"}))
+    _: Dict[str, Any] = Depends(
+        require_roles({"system_admin", "data_engineer", "field_operator"})
+    )
 ):
     """List all trained LSTM models"""
     if not ADVANCED_LSTM_AVAILABLE:
         return {"models": [], "message": "Advanced LSTM not available"}
-    
+
     from advanced_lstm_model import _well_models
-    
+
     models_info = []
     for key, model in _well_models.items():
         if model.is_trained:
             well_name, model_type = key.rsplit("_", 1)
-            models_info.append({
-                "well_name": well_name,
-                "model_type": model_type,
-                "sequence_length": model.sequence_length,
-                "forecast_horizon": model.forecast_horizon,
-                "is_trained": model.is_trained
-            })
-    
-    return {
-        "models": models_info,
-        "count": len(models_info)
-    }
+            models_info.append(
+                {
+                    "well_name": well_name,
+                    "model_type": model_type,
+                    "sequence_length": model.sequence_length,
+                    "forecast_horizon": model.forecast_horizon,
+                    "is_trained": model.is_trained,
+                }
+            )
+
+    return {"models": models_info, "count": len(models_info)}
 
 
 @app.get("/models")
@@ -568,7 +601,9 @@ async def reload_models(
 async def list_model_versions(
     model_type: str,
     limit: int = 20,
-    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"})),
+    _: Dict[str, Any] = Depends(
+        require_roles({"system_admin", "data_engineer", "field_operator"})
+    ),
 ):
     """List model versions from MLflow registry."""
     if not (MLFLOW_AVAILABLE and mlflow_manager):
@@ -578,7 +613,11 @@ async def list_model_versions(
         raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
     try:
         versions = mlflow_manager.list_model_versions(registry_name, limit=limit)
-        return {"model_type": model_type, "registry": registry_name, "versions": versions}
+        return {
+            "model_type": model_type,
+            "registry": registry_name,
+            "versions": versions,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to list versions: {exc}")
 
@@ -618,7 +657,10 @@ async def configure_ab_test(
     if not (MLFLOW_AVAILABLE and mlflow_manager):
         raise HTTPException(status_code=503, detail="MLflow integration not available")
     if model_type == "time_series_forecast":
-        raise HTTPException(status_code=400, detail="A/B testing currently supports only inference endpoints.")
+        raise HTTPException(
+            status_code=400,
+            detail="A/B testing currently supports only inference endpoints.",
+        )
     if model_type not in MODEL_TYPE_TO_REGISTRY:
         raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
 
@@ -640,7 +682,9 @@ async def configure_ab_test(
 @app.get("/models/{model_type}/ab-test")
 async def get_ab_test_config(
     model_type: str,
-    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"})),
+    _: Dict[str, Any] = Depends(
+        require_roles({"system_admin", "data_engineer", "field_operator"})
+    ),
 ):
     """Get active A/B test configuration."""
     if not (MLFLOW_AVAILABLE and mlflow_manager):
@@ -675,7 +719,9 @@ async def set_drift_baseline(
 async def detect_drift(
     model_type: str,
     request: DriftDetectRequest,
-    _: Dict[str, Any] = Depends(require_roles({"system_admin", "data_engineer", "field_operator"})),
+    _: Dict[str, Any] = Depends(
+        require_roles({"system_admin", "data_engineer", "field_operator"})
+    ),
 ):
     """Detect feature drift against the configured baseline."""
     if not (MLFLOW_AVAILABLE and mlflow_manager):
@@ -703,5 +749,5 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8003)
 
+    uvicorn.run(app, host="0.0.0.0", port=8003)

@@ -1,16 +1,30 @@
-import { ReactNode } from 'react'
+import { ReactNode, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../hooks/useAuth'
+import { kpiAPI } from '../api/services'
 import './Layout.css'
 
 interface LayoutProps {
   children: ReactNode
 }
 
+function featureFromPath(pathname: string): string {
+  if (pathname === '/') return 'dashboard'
+  const segment = pathname.replace(/^\//, '').split('/')[0]
+  return segment || 'dashboard'
+}
+
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    const feature = featureFromPath(location.pathname)
+    kpiAPI.recordFeatureUsage(feature).catch(() => {
+      /* non-blocking adoption metric */
+    })
+  }, [location.pathname])
 
   const handleLogout = () => {
     logout()

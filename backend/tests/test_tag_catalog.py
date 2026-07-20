@@ -6,8 +6,8 @@ import sys
 import os
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tag-catalog-service'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tag-catalog-service"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from main import app, require_tag_read, require_tag_write, require_tag_admin
 from shared.database import get_db
@@ -17,11 +17,13 @@ from shared.auth import require_authentication, require_roles
 
 def override_get_db(test_db):
     """Override database dependency"""
+
     def _override():
         try:
             yield test_db
         finally:
             pass
+
     return _override
 
 
@@ -29,9 +31,18 @@ def override_get_db(test_db):
 def client(test_db):
     """Create test client"""
     app.dependency_overrides[get_db] = override_get_db(test_db)
-    app.dependency_overrides[require_tag_read] = lambda: {"sub": "testuser", "role": "system_admin"}
-    app.dependency_overrides[require_tag_write] = lambda: {"sub": "testuser", "role": "system_admin"}
-    app.dependency_overrides[require_tag_admin] = lambda: {"sub": "testuser", "role": "system_admin"}
+    app.dependency_overrides[require_tag_read] = lambda: {
+        "sub": "testuser",
+        "role": "system_admin",
+    }
+    app.dependency_overrides[require_tag_write] = lambda: {
+        "sub": "testuser",
+        "role": "system_admin",
+    }
+    app.dependency_overrides[require_tag_admin] = lambda: {
+        "sub": "testuser",
+        "role": "system_admin",
+    }
     return TestClient(app)
 
 
@@ -48,7 +59,7 @@ def test_tag(test_db):
         valid_range_max=500.0,
         critical_threshold_min=10.0,
         critical_threshold_max=450.0,
-        status="active"
+        status="active",
     )
     test_db.add(tag)
     test_db.commit()
@@ -68,10 +79,10 @@ def test_create_tag(client):
             "unit": "C",
             "valid_range_min": -40.0,
             "valid_range_max": 150.0,
-            "status": "active"
-        }
+            "status": "active",
+        },
     )
-    
+
     assert response.status_code == 201
     data = response.json()
     assert "tag_id" in data
@@ -80,7 +91,7 @@ def test_create_tag(client):
 def test_get_tag(client, test_tag):
     """Test getting a tag"""
     response = client.get(f"/tags/{test_tag.tag_id}")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["tag_id"] == test_tag.tag_id
@@ -90,7 +101,7 @@ def test_get_tag(client, test_tag):
 def test_list_tags(client, test_tag):
     """Test listing tags"""
     response = client.get("/tags")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert "tags" in data
@@ -101,7 +112,7 @@ def test_list_tags(client, test_tag):
 def test_list_tags_filter_by_well(client, test_tag):
     """Test filtering tags by well name"""
     response = client.get(f"/tags?well_name={test_tag.well_name}")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert all(tag["well_name"] == test_tag.well_name for tag in data["tags"])
@@ -119,21 +130,20 @@ def test_update_tag(client, test_tag):
             "unit": test_tag.unit,
             "valid_range_min": 0.0,
             "valid_range_max": 600.0,  # Updated
-            "status": "active"
-        }
+            "status": "active",
+        },
     )
-    
+
     assert response.status_code == 200
 
 
 def test_delete_tag(client, test_tag):
     """Test deleting a tag (soft delete)"""
     response = client.delete(f"/tags/{test_tag.tag_id}")
-    
+
     assert response.status_code == 200
-    
+
     # Verify tag is soft deleted
     response = client.get(f"/tags/{test_tag.tag_id}")
     data = response.json()
     assert data["status"] == "deleted"
-

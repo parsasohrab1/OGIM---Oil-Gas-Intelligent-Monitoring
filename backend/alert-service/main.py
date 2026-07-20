@@ -12,17 +12,17 @@ import sys
 import os
 import uuid
 
-# Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# Add backend directory to path so `shared` can be imported as a package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from database import get_db
-from models import Alert, AlertRule, User
-from config import settings
-from logging_config import setup_logging
-from kafka_utils import KafkaProducerWrapper, KAFKA_TOPICS
-from auth import require_authentication, require_roles
-from tracing import setup_tracing
-from metrics import setup_metrics
+from shared.database import get_db
+from shared.models import Alert, AlertRule, User
+from shared.config import settings
+from shared.logging_config import setup_logging
+from shared.kafka_utils import KafkaProducerWrapper, KAFKA_TOPICS
+from shared.auth import require_authentication, require_roles
+from shared.tracing import setup_tracing
+from shared.metrics import setup_metrics
 from sqlalchemy.orm import Session
 import httpx
 import asyncio
@@ -46,7 +46,9 @@ app.add_middleware(
 
 # Kafka producer
 alert_producer = None
-ALERT_CORRELATION_WINDOW_MINUTES = int(os.getenv("ALERT_CORRELATION_WINDOW_MINUTES", "15"))
+ALERT_CORRELATION_WINDOW_MINUTES = int(
+    os.getenv("ALERT_CORRELATION_WINDOW_MINUTES", "15")
+)
 ALERT_FATIGUE_COOLDOWN_SECONDS = {
     "critical": int(os.getenv("ALERT_FATIGUE_COOLDOWN_CRITICAL", "60")),
     "warning": int(os.getenv("ALERT_FATIGUE_COOLDOWN_WARNING", "180")),
@@ -187,7 +189,9 @@ def _infer_rca(candidates: List[Alert]) -> Dict[str, Any]:
     }
 
 
-async def _send_push_notification(title: str, body: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def _send_push_notification(
+    title: str, body: str, data: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     tokens = [item["device_token"] for item in REGISTERED_PUSH_DEVICES.values()]
     if not tokens:
         return {"sent": 0, "reason": "no_registered_devices"}
@@ -242,28 +246,39 @@ async def shutdown_event():
 async def create_alert(
     alert: AlertCreate,
     db: Session = Depends(get_db),
-    _: Dict[str, Any] = Depends(require_alert_write)
+    _: Dict[str, Any] = Depends(require_alert_write),
 ):
     """Create a new alert"""
     # De-duplication + fatigue suppression: check if similar alert exists
-    existing = db.query(Alert).filter(
-        Alert.well_name == alert.well_name,
-        Alert.rule_name == alert.rule_name,
-        Alert.tag_id == alert.sensor_id,
-        Alert.status == "open"
-    ).order_by(Alert.timestamp.desc()).first()
-    
+    existing = (
+        db.query(Alert)
+        .filter(
+            Alert.well_name == alert.well_name,
+            Alert.rule_name == alert.rule_name,
+            Alert.tag_id == alert.sensor_id,
+            Alert.status == "open",
+        )
+        .order_by(Alert.timestamp.desc())
+        .first()
+    )
+
     if existing:
         existing_meta = _merge_metadata(existing.metadata_json)
-        existing_meta["occurrence_count"] = int(existing_meta.get("occurrence_count", 1)) + 1
+        existing_meta["occurrence_count"] = (
+            int(existing_meta.get("occurrence_count", 1)) + 1
+        )
         existing_meta["last_seen_at"] = datetime.utcnow().isoformat()
         cooldown_s = ALERT_FATIGUE_COOLDOWN_SECONDS.get(alert.severity.lower(), 120)
         fatigue_meta = existing_meta.get("fatigue", {}) or {}
         fatigue_meta["cooldown_s"] = cooldown_s
 
         if _should_suppress_for_fatigue(alert, existing):
-            existing_meta["suppressed_count"] = int(existing_meta.get("suppressed_count", 0)) + 1
-            fatigue_meta["last_notified_at"] = fatigue_meta.get("last_notified_at") or existing.timestamp.isoformat()
+            existing_meta["suppressed_count"] = (
+                int(existing_meta.get("suppressed_count", 0)) + 1
+            )
+            fatigue_meta["last_notified_at"] = (
+                fatigue_meta.get("last_notified_at") or existing.timestamp.isoformat()
+            )
             existing.metadata_json = existing_meta
             existing.timestamp = max(existing.timestamp, alert.timestamp)
             db.commit()
@@ -288,11 +303,18 @@ async def create_alert(
             "occurrence_count": existing_meta["occurrence_count"],
         }
 
-    correlation_cutoff = datetime.utcnow() - timedelta(minutes=ALERT_CORRELATION_WINDOW_MINUTES)
-    related = db.query(Alert).filter(
-        Alert.well_name == alert.well_name,
-        Alert.timestamp >= correlation_cutoff
-    ).order_by(Alert.timestamp.desc()).limit(50).all()
+    correlation_cutoff = datetime.utcnow() - timedelta(
+        minutes=ALERT_CORRELATION_WINDOW_MINUTES
+    )
+    related = (
+        db.query(Alert)
+        .filter(
+            Alert.well_name == alert.well_name, Alert.timestamp >= correlation_cutoff
+        )
+        .order_by(Alert.timestamp.desc())
+        .limit(50)
+        .all()
+    )
 
     correlation_id = None
     for related_alert in related:
@@ -304,8 +326,10 @@ async def create_alert(
             correlation_id = rel_corr
             break
     if not correlation_id:
-        correlation_id = f"corr-{uuid.uuid4().hex[:12]}-{_derive_correlation_key(alert)}"
-    
+        correlation_id = (
+            f"corr-{uuid.uuid4().hex[:12]}-{_derive_correlation_key(alert)}"
+        )
+
     # Create alert
     now_iso = datetime.utcnow().isoformat()
     metadata_json = _default_metadata()
@@ -317,7 +341,9 @@ async def create_alert(
             "occurrence_count": 1,
             "suppressed_count": 0,
             "fatigue": {
-                "cooldown_s": ALERT_FATIGUE_COOLDOWN_SECONDS.get(alert.severity.lower(), 120),
+                "cooldown_s": ALERT_FATIGUE_COOLDOWN_SECONDS.get(
+                    alert.severity.lower(), 120
+                ),
                 "last_notified_at": now_iso,
             },
             "correlation_context": {
@@ -338,34 +364,39 @@ async def create_alert(
         rule_name=alert.rule_name,
         metadata_json=metadata_json,
     )
-    
+
     db.add(db_alert)
     db.commit()
     db.refresh(db_alert)
-    
+
     # Publish to Kafka
     try:
         if alert_producer:
             alert_producer.send(alert.alert_id, alert.dict())
     except Exception as e:
         logger.error(f"Failed to publish alert to Kafka: {e}")
-    
+
     # Auto-create work order for critical alerts if enabled (background task)
     if alert.severity == "critical" and settings.ERP_AUTO_CREATE_WORK_ORDERS:
-        import asyncio
+
         async def create_work_order():
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         f"{settings.ERP_SERVICE_URL}/work-orders/auto-create",
-                        params={"alert_id": alert.alert_id, "erp_type": settings.ERP_DEFAULT_SYSTEM},
-                        timeout=10.0
+                        params={
+                            "alert_id": alert.alert_id,
+                            "erp_type": settings.ERP_DEFAULT_SYSTEM,
+                        },
+                        timeout=10.0,
                     )
                     if response.status_code == 200:
-                        logger.info(f"Auto-created work order for alert {alert.alert_id}")
+                        logger.info(
+                            f"Auto-created work order for alert {alert.alert_id}"
+                        )
             except Exception as e:
                 logger.error(f"Failed to auto-create work order: {e}")
-        
+
         # Run in background
         asyncio.create_task(create_work_order())
 
@@ -375,10 +406,14 @@ async def create_alert(
             _send_push_notification(
                 title="Critical OGIM Alert",
                 body=f"{alert.well_name}: {alert.message}",
-                data={"alert_id": alert.alert_id, "severity": alert.severity, "well_name": alert.well_name},
+                data={
+                    "alert_id": alert.alert_id,
+                    "severity": alert.severity,
+                    "well_name": alert.well_name,
+                },
             )
         )
-    
+
     logger.info(f"Alert created: {alert.alert_id}")
     return {
         "alert_id": alert.alert_id,
@@ -394,25 +429,24 @@ async def list_alerts(
     severity: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
-    _: Dict[str, Any] = Depends(require_alert_read)
+    _: Dict[str, Any] = Depends(require_alert_read),
 ):
     """List alerts with optional filtering"""
     query = db.query(Alert).order_by(Alert.timestamp.desc())
-    
+
     if well_name:
         query = query.filter(Alert.well_name == well_name)
     if status:
         query = query.filter(Alert.status == status)
     if severity:
         query = query.filter(Alert.severity == severity)
-    
+
     alerts = query.limit(limit).all()
     return {
         "alerts": [
-            AlertResponse.model_validate(alert).model_dump()
-            for alert in alerts
+            AlertResponse.model_validate(alert).model_dump() for alert in alerts
         ],
-        "count": len(alerts)
+        "count": len(alerts),
     }
 
 
@@ -420,13 +454,13 @@ async def list_alerts(
 async def acknowledge_alert(
     alert_id: str,
     db: Session = Depends(get_db),
-    claims: Dict[str, Any] = Depends(require_alert_write)
+    claims: Dict[str, Any] = Depends(require_alert_write),
 ):
     """Acknowledge an alert"""
     alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
-    
+
     # Get user
     username = claims.get("sub")
     if not username:
@@ -435,14 +469,14 @@ async def acknowledge_alert(
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     alert.status = "acknowledged"
     alert.acknowledged_by_id = user.id
     alert.acknowledged_at = datetime.utcnow()
-    
+
     db.commit()
     logger.info(f"Alert acknowledged: {alert_id} by {username}")
-    
+
     return {"message": "Alert acknowledged", "alert_id": alert_id}
 
 
@@ -450,19 +484,19 @@ async def acknowledge_alert(
 async def resolve_alert(
     alert_id: str,
     db: Session = Depends(get_db),
-    _: Dict[str, Any] = Depends(require_alert_admin)
+    _: Dict[str, Any] = Depends(require_alert_admin),
 ):
     """Resolve an alert"""
     alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
-    
+
     alert.status = "resolved"
     alert.resolved_at = datetime.utcnow()
-    
+
     db.commit()
     logger.info(f"Alert resolved: {alert_id}")
-    
+
     return {"message": "Alert resolved", "alert_id": alert_id}
 
 
@@ -474,7 +508,13 @@ async def list_correlated_alerts(
     _: Dict[str, Any] = Depends(require_alert_read),
 ):
     """List correlated alert groups to support noise reduction and triage."""
-    alerts = db.query(Alert).filter(Alert.status == status).order_by(Alert.timestamp.desc()).limit(limit).all()
+    alerts = (
+        db.query(Alert)
+        .filter(Alert.status == status)
+        .order_by(Alert.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
     groups: Dict[str, Dict[str, Any]] = {}
     for alert in alerts:
         meta = _merge_metadata(alert.metadata_json)
@@ -490,11 +530,19 @@ async def list_correlated_alerts(
             }
         groups[correlation_id]["alerts"].append(alert.alert_id)
         groups[correlation_id]["count"] += 1
-        groups[correlation_id]["suppressed_total"] += int(meta.get("suppressed_count", 0))
-        if _severity_rank(alert.severity) > _severity_rank(groups[correlation_id]["max_severity"]):
+        groups[correlation_id]["suppressed_total"] += int(
+            meta.get("suppressed_count", 0)
+        )
+        if _severity_rank(alert.severity) > _severity_rank(
+            groups[correlation_id]["max_severity"]
+        ):
             groups[correlation_id]["max_severity"] = alert.severity
 
-    grouped = sorted(groups.values(), key=lambda x: (x["count"], _severity_rank(x["max_severity"])), reverse=True)
+    grouped = sorted(
+        groups.values(),
+        key=lambda x: (x["count"], _severity_rank(x["max_severity"])),
+        reverse=True,
+    )
     return {"groups": grouped, "count": len(grouped)}
 
 
@@ -510,11 +558,19 @@ async def run_alert_rca(
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    lookback_start = datetime.utcnow() - timedelta(minutes=max(5, request.lookback_minutes))
-    candidates = db.query(Alert).filter(
-        Alert.well_name == alert.well_name,
-        Alert.timestamp >= lookback_start,
-    ).order_by(Alert.timestamp.desc()).limit(100).all()
+    lookback_start = datetime.utcnow() - timedelta(
+        minutes=max(5, request.lookback_minutes)
+    )
+    candidates = (
+        db.query(Alert)
+        .filter(
+            Alert.well_name == alert.well_name,
+            Alert.timestamp >= lookback_start,
+        )
+        .order_by(Alert.timestamp.desc())
+        .limit(100)
+        .all()
+    )
 
     rca = _infer_rca(candidates)
     metadata = _merge_metadata(alert.metadata_json)
@@ -565,7 +621,10 @@ async def list_push_devices(
     _: Dict[str, Any] = Depends(require_alert_admin),
 ):
     """List currently registered push devices."""
-    return {"devices": list(REGISTERED_PUSH_DEVICES.values()), "count": len(REGISTERED_PUSH_DEVICES)}
+    return {
+        "devices": list(REGISTERED_PUSH_DEVICES.values()),
+        "count": len(REGISTERED_PUSH_DEVICES),
+    }
 
 
 @app.post("/alerts/{alert_id}/create-work-order")
@@ -573,74 +632,80 @@ async def create_work_order_from_alert(
     alert_id: str,
     erp_type: str = "sap",
     db: Session = Depends(get_db),
-    _: Dict[str, Any] = Depends(require_alert_write)
+    _: Dict[str, Any] = Depends(require_alert_write),
 ):
     """Create work order from alert manually"""
     alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
-    
+
     # Check if work order already exists
     if alert.erp_work_order_id:
         return {
             "message": "Work order already exists for this alert",
             "work_order_id": alert.erp_work_order_id,
-            "alert_id": alert_id
+            "alert_id": alert_id,
         }
-    
+
     try:
         # Call ERP service to create work order
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{settings.ERP_SERVICE_URL}/work-orders/auto-create",
                 params={"alert_id": alert_id, "erp_type": erp_type},
-                timeout=30.0
+                timeout=30.0,
             )
-            
+
             if response.status_code == 200:
                 work_order_data = response.json()
                 # Update alert with work order ID
                 alert.erp_work_order_id = work_order_data.get("work_order_id")
                 db.commit()
-                
-                logger.info(f"Created work order {work_order_data.get('work_order_id')} for alert {alert_id}")
+
+                logger.info(
+                    f"Created work order {work_order_data.get('work_order_id')} for alert {alert_id}"
+                )
                 return {
                     "message": "Work order created successfully",
                     "work_order_id": work_order_data.get("work_order_id"),
                     "erp_system": work_order_data.get("erp_system"),
                     "status": work_order_data.get("status"),
-                    "alert_id": alert_id
+                    "alert_id": alert_id,
                 }
             else:
                 error_detail = response.text
                 logger.error(f"Failed to create work order: {error_detail}")
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=f"Failed to create work order: {error_detail}"
+                    detail=f"Failed to create work order: {error_detail}",
                 )
     except httpx.TimeoutException:
         logger.error("Timeout while creating work order")
         raise HTTPException(status_code=504, detail="ERP service timeout")
     except httpx.RequestError as e:
         logger.error(f"Error connecting to ERP service: {e}")
-        raise HTTPException(status_code=503, detail=f"ERP service unavailable: {str(e)}")
+        raise HTTPException(
+            status_code=503, detail=f"ERP service unavailable: {str(e)}"
+        )
     except Exception as e:
         logger.error(f"Unexpected error creating work order: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create work order: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create work order: {str(e)}"
+        )
 
 
 @app.post("/rules")
 async def create_rule(
     rule: AlertRuleCreate,
     db: Session = Depends(get_db),
-    _: Dict[str, Any] = Depends(require_alert_admin)
+    _: Dict[str, Any] = Depends(require_alert_admin),
 ):
     """Create an alert rule"""
     db_rule = AlertRule(**rule.dict())
     db.add(db_rule)
     db.commit()
     db.refresh(db_rule)
-    
+
     logger.info(f"Alert rule created: {rule.rule_id}")
     return {"message": "Rule created", "rule_id": rule.rule_id}
 
@@ -649,21 +714,20 @@ async def create_rule(
 async def list_rules(
     enabled: Optional[bool] = None,
     db: Session = Depends(get_db),
-    _: Dict[str, Any] = Depends(require_alert_read)
+    _: Dict[str, Any] = Depends(require_alert_read),
 ):
     """List all alert rules"""
     query = db.query(AlertRule)
-    
+
     if enabled is not None:
         query = query.filter(AlertRule.enabled == enabled)
-    
+
     rules = query.all()
     return {
         "rules": [
-            AlertRuleResponse.model_validate(rule).model_dump()
-            for rule in rules
+            AlertRuleResponse.model_validate(rule).model_dump() for rule in rules
         ],
-        "count": len(rules)
+        "count": len(rules),
     }
 
 

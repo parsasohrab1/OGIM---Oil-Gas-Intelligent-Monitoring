@@ -554,6 +554,10 @@ export const kpiAPI = {
     const response = await apiClient.get('/kpi/cache-stats')
     return response.data
   },
+  recordFeatureUsage: async (feature: string) => {
+    const response = await apiClient.post('/kpi/feature-usage', { feature })
+    return response.data
+  },
 }
 
 export default {

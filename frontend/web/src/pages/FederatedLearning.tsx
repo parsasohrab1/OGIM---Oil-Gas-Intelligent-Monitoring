@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import './FederatedLearning.css'
 
 interface EdgeNode {
@@ -115,8 +115,6 @@ export default function FederatedLearning() {
   ]
 
   const selectedNodeData = edgeNodes.find(n => n.nodeId === selectedNode)
-
-  const COLORS = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c']
 
   return (
     <div className="federated-learning-page">
