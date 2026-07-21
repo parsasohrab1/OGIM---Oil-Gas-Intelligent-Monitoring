@@ -367,6 +367,16 @@ class Settings(BaseSettings):
         default=False, env="ERP_AUTO_CREATE_WORK_ORDERS"
     )
 
+    # SMS Alert Notifications (Kavenegar / Twilio / mock)
+    SMS_ENABLED: bool = Field(default=True, env="SMS_ENABLED")
+    SMS_PROVIDER: str = Field(default="mock", env="SMS_PROVIDER")  # mock|kavenegar|twilio
+    SMS_SEVERITIES: str = Field(default="critical,warning", env="SMS_SEVERITIES")
+    KAVENEGAR_API_KEY: Optional[str] = Field(default=None, env="KAVENEGAR_API_KEY")
+    KAVENEGAR_SENDER: str = Field(default="10008663", env="KAVENEGAR_SENDER")
+    TWILIO_ACCOUNT_SID: Optional[str] = Field(default=None, env="TWILIO_ACCOUNT_SID")
+    TWILIO_AUTH_TOKEN: Optional[str] = Field(default=None, env="TWILIO_AUTH_TOKEN")
+    TWILIO_FROM_NUMBER: Optional[str] = Field(default=None, env="TWILIO_FROM_NUMBER")
+
     class Config:
         env_file = candidate_env_file
         case_sensitive = True

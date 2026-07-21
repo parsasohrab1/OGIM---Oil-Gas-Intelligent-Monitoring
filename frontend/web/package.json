@@ -1,7 +1,7 @@
 {
-  "name": "ogim-web-portal",
+  "name": "sogf-web-portal",
   "version": "1.0.0",
-  "description": "Oil & Gas Intelligent Monitoring Web Portal",
+  "description": "SOGF - Smartening Oil & Gas Fields Web Portal",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

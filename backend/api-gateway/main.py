@@ -61,8 +61,8 @@ from shared.kpi_metrics import (
 )
 
 app = FastAPI(
-    title="OGIM API Gateway",
-    description="API Gateway for Oil & Gas Intelligent Monitoring System",
+    title="SOGF API Gateway",
+    description="API Gateway for SOGF - Smartening Oil & Gas Fields",
     version="1.0.0",
 )
 

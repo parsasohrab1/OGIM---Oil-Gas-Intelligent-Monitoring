@@ -117,9 +117,9 @@ export default function SecurityCenter() {
             <h3>Severity Trend</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={trendData}>
-                <XAxis dataKey="time" tick={{ fill: '#888', fontSize: 11 }} />
-                <YAxis allowDecimals={false} tick={{ fill: '#888', fontSize: 11 }} />
-                <Tooltip contentStyle={{ background: '#1e1e1e', border: '1px solid #444' }} />
+                <XAxis dataKey="time" tick={{ fill: '#555', fontSize: 11 }} />
+                <YAxis allowDecimals={false} tick={{ fill: '#555', fontSize: 11 }} />
+                <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #ccc', color: '#111' }} />
                 <Bar dataKey="critical" stackId="a" fill={SEV_COLORS.critical} />
                 <Bar dataKey="high" stackId="a" fill={SEV_COLORS.high} />
                 <Bar dataKey="medium" stackId="a" fill={SEV_COLORS.medium} />
@@ -137,7 +137,7 @@ export default function SecurityCenter() {
                     <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ background: '#1e1e1e', border: '1px solid #444' }} />
+                <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #ccc', color: '#111' }} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
               </PieChart>
             </ResponsiveContainer>

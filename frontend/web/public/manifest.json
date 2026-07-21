@@ -1,7 +1,7 @@
 {
-  "name": "OGIM - Oil & Gas Intelligent Monitoring",
-  "short_name": "OGIM",
-  "description": "Real-time monitoring, digital twins, and predictive analytics for oil & gas operations",
+  "name": "SOGF - Smartening Oil & Gas Fields",
+  "short_name": "SOGF",
+  "description": "Smartening Oil & Gas Fields — real-time monitoring, digital twins, and predictive analytics",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#121212",

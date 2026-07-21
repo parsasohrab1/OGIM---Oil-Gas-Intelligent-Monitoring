@@ -57,6 +57,17 @@ ALERT_FATIGUE_COOLDOWN_SECONDS = {
 REGISTERED_PUSH_DEVICES: Dict[str, Dict[str, Any]] = {}
 EXPO_PUSH_API_URL = "https://exp.host/--/api/v2/push/send"
 
+from sms_notify import (  # noqa: E402
+    register_sms_recipient,
+    unregister_sms_recipient,
+    list_sms_recipients,
+    send_sms,
+    notify_alert_via_sms,
+    sms_provider_status,
+    SMS_OUTBOX,
+)
+
+
 
 class AlertCreate(BaseModel):
     alert_id: str
@@ -118,6 +129,18 @@ class PushDeviceRegisterRequest(BaseModel):
     user_id: str
     platform: str
     device_token: str
+
+
+class SmsRegisterRequest(BaseModel):
+    phone: str
+    label: Optional[str] = "اپراتور میدان"
+    enabled: bool = True
+    severities: Optional[List[str]] = None
+
+
+class SmsTestRequest(BaseModel):
+    phone: Optional[str] = None
+    message: Optional[str] = None
 
 
 def _severity_rank(severity: str) -> int:
@@ -414,6 +437,17 @@ async def create_alert(
             )
         )
 
+    # SMS notification for configured severities (best effort).
+    if settings.SMS_ENABLED:
+        asyncio.create_task(
+            notify_alert_via_sms(
+                alert_id=alert.alert_id,
+                well_name=alert.well_name,
+                severity=alert.severity,
+                message=alert.message,
+            )
+        )
+
     logger.info(f"Alert created: {alert.alert_id}")
     return {
         "alert_id": alert.alert_id,
@@ -625,6 +659,118 @@ async def list_push_devices(
         "devices": list(REGISTERED_PUSH_DEVICES.values()),
         "count": len(REGISTERED_PUSH_DEVICES),
     }
+
+
+@app.get("/notifications/sms/status")
+async def get_sms_status(
+    _: Dict[str, Any] = Depends(require_alert_read),
+):
+    """SMS provider status + registered recipients."""
+    return {
+        **sms_provider_status(),
+        "recipients": list_sms_recipients(),
+    }
+
+
+@app.post("/notifications/sms/register")
+async def register_sms_phone(
+    request: SmsRegisterRequest,
+    _: Dict[str, Any] = Depends(require_alert_write),
+):
+    """Register a mobile number for alert SMS."""
+    try:
+        recipient = register_sms_recipient(
+            request.phone,
+            label=request.label or "اپراتور میدان",
+            enabled=request.enabled,
+            severities=request.severities,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "message": "شماره موبایل برای پیامک هشدار ثبت شد",
+        "recipient": recipient,
+        "status": sms_provider_status(),
+    }
+
+
+@app.post("/notifications/sms/unregister")
+async def unregister_sms_phone(
+    request: SmsRegisterRequest,
+    _: Dict[str, Any] = Depends(require_alert_write),
+):
+    """Remove a mobile number from SMS alerts."""
+    try:
+        removed = unregister_sms_recipient(request.phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="شماره یافت نشد")
+    return {"message": "شماره حذف شد", "status": sms_provider_status()}
+
+
+@app.post("/notifications/sms/test")
+async def send_test_sms(
+    request: SmsTestRequest,
+    _: Dict[str, Any] = Depends(require_alert_write),
+):
+    """Send a test SMS to a registered (or provided) phone number."""
+    phone = request.phone
+    if not phone:
+        recipients = list_sms_recipients()
+        if not recipients:
+            raise HTTPException(
+                status_code=400,
+                detail="ابتدا یک شماره موبایل ثبت کنید",
+            )
+        phone = recipients[0]["phone"]
+    message = request.message or (
+        "SOGF پیامک آزمایشی\n"
+        "سامانه هوشمندسازی میدان دهلران\n"
+        "اگر این پیام را دریافت کردید، اعلان SMS فعال است."
+    )
+    try:
+        entry = await send_sms(phone, message, meta={"type": "test"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "message": "پیامک آزمایشی ارسال/صف‌بندی شد",
+        "entry": entry,
+        "status": sms_provider_status(),
+    }
+
+
+@app.get("/notifications/sms/outbox")
+async def list_sms_outbox(
+    limit: int = 30,
+    _: Dict[str, Any] = Depends(require_alert_read),
+):
+    """Recent SMS outbox (includes mock provider records)."""
+    return {"count": len(SMS_OUTBOX[:limit]), "messages": SMS_OUTBOX[:limit]}
+
+
+@app.post("/alerts/{alert_id}/sms")
+async def send_alert_sms_manual(
+    alert_id: str,
+    db: Session = Depends(get_db),
+    _: Dict[str, Any] = Depends(require_alert_write),
+):
+    """Manually SMS-notify an existing alert to all registered numbers."""
+    alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    result = await notify_alert_via_sms(
+        alert_id=alert.alert_id,
+        well_name=alert.well_name,
+        severity=alert.severity,
+        message=alert.message,
+    )
+    if result.get("sent", 0) == 0 and result.get("reason") == "no_recipients":
+        raise HTTPException(
+            status_code=400,
+            detail="هیچ شماره موبایلی برای پیامک ثبت نشده است",
+        )
+    return {"alert_id": alert_id, **result}
 
 
 @app.post("/alerts/{alert_id}/create-work-order")

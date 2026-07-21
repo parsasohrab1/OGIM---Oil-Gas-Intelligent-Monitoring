@@ -49,7 +49,7 @@ apiClient.interceptors.response.use(
     }
 
     if (error.response?.status === 401) {
-      // Token expired, try to refresh
+      // Login removed — clear stale tokens but do not redirect
       const refreshToken = localStorage.getItem('refresh_token')
       if (refreshToken) {
         try {
@@ -61,20 +61,14 @@ apiClient.interceptors.response.use(
           localStorage.setItem('access_token', access_token)
           localStorage.setItem('refresh_token', newRefreshToken)
           
-          // Retry original request
           if (error.config) {
             error.config.headers.Authorization = `Bearer ${access_token}`
             return apiClient.request(error.config)
           }
-        } catch (refreshError) {
-          // Refresh failed, redirect to login
+        } catch {
           localStorage.removeItem('access_token')
           localStorage.removeItem('refresh_token')
-          window.location.href = '/login'
         }
-      } else {
-        // No refresh token, redirect to login
-        window.location.href = '/login'
       }
     }
     

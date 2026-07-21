@@ -41,7 +41,7 @@ self.addEventListener('fetch', (event) => {
 
 self.addEventListener('push', (event) => {
   const data = event.data ? event.data.json() : {}
-  const title = data.title || 'OGIM Alert'
+  const title = data.title || 'SOGF Alert'
   const options = {
     body: data.body || 'New critical alert',
     icon: '/icons/icon-192.png',
